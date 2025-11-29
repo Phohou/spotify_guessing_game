@@ -1,0 +1,40 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+    
+    // Game sessions - anyone can read, only authenticated users can create
+    match /gameSessions/{sessionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && 
+                      request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false; // Immutable after creation
+    }
+    
+    // Saved playlists - anyone can read public ones, owners can manage
+    match /savedPlaylists/{playlistId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && 
+                      request.resource.data.userId == request.auth.uid;
+      allow update: if isOwner(resource.data.userId);
+      allow delete: if isOwner(resource.data.userId);
+    }
+  }
+}

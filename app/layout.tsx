@@ -24,6 +24,19 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              window.onSpotifyWebPlaybackSDKReady = () => {
+                window.spotifyReady = true;
+                window.dispatchEvent(new Event('spotify-ready'));
+              };
+            `,
+          }}
+        />
+        <script src="https://sdk.scdn.co/spotify-player.js" async></script>
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
