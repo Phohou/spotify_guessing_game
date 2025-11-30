@@ -268,6 +268,8 @@ function GameContent() {
     try {
       await addDoc(collection(db, 'gameSessions'), {
         userId: user?.uid,
+        userName: user?.displayName || user?.email || 'Anonymous',
+        userPhoto: user?.photoURL,
         playlistId: playlistInfo.id,
         playlistName: playlistInfo.name,
         score,

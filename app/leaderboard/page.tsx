@@ -122,7 +122,7 @@ function LeaderboardContent() {
           <div className="bg-[#212121] rounded-2xl border border-[#535353] shadow-xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
-                <thead className="bg-gray-50">
+                <thead className="bg-[#181818]">
                   <tr>
                     <th className="px-6 py-4 text-left text-xs font-medium text-[#b3b3b3] uppercase tracking-wider">
                       Rank
@@ -141,13 +141,13 @@ function LeaderboardContent() {
                     </th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="bg-[#212121] divide-y divide-[#535353]">
                   {entries.map((entry, index) => (
                     <tr
                       key={entry.id}
                       className={`${
-                        entry.userId === user?.uid ? 'bg-green-50' : ''
-                      } hover:bg-gray-50 transition`}
+                        entry.userId === user?.uid ? 'bg-[#1db954]/20' : ''
+                      } hover:bg-[#181818] transition`}
                     >
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
