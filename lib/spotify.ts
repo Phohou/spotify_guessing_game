@@ -106,39 +106,59 @@ export const exchangeCodeForToken = async (code: string): Promise<string> => {
   console.log('  Redirect URI:', redirectUri);
   console.log('  Code verifier exists:', !!codeVerifier);
   
-  const response = await fetch(SPOTIFY_TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      client_id: clientId!,
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: redirectUri,
-      code_verifier: codeVerifier,
-    }),
-  });
+  let response;
+  try {
+    response = await fetch(SPOTIFY_TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: clientId!,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier,
+      }),
+    });
+  } catch (err) {
+    console.error('❌ Network error during token exchange:', err);
+    throw new Error('Network error: Unable to connect to Spotify');
+  }
+  
+  // Always read response as text first to handle non-JSON responses
+  const responseText = await response.text();
+  console.log('📥 Response status:', response.status, response.statusText);
+  console.log('📥 Response preview:', responseText.substring(0, 200));
   
   if (!response.ok) {
-    const responseText = await response.text();
     console.error('❌ Token exchange failed:');
     console.error('  Status:', response.status, response.statusText);
-    console.error('  Response:', responseText);
+    console.error('  Full Response:', responseText);
     
     let errorMessage = 'Failed to exchange code for token';
     try {
       const error = JSON.parse(responseText);
       errorMessage = error.error_description || error.error || errorMessage;
+      console.error('  Parsed Error:', error);
     } catch {
       // Response is not JSON, use raw text
-      errorMessage = responseText.substring(0, 200);
+      errorMessage = `Server error: ${responseText.substring(0, 200)}`;
+      console.error('  Response was not JSON');
     }
     
     throw new Error(errorMessage);
   }
   
-  const data = await response.json();
+  // Parse successful response
+  let data;
+  try {
+    data = JSON.parse(responseText);
+  } catch (err) {
+    console.error('❌ Failed to parse success response:', responseText);
+    throw new Error('Invalid response format from Spotify');
+  }
+  
   localStorage.removeItem('spotify_code_verifier');
   
   return data.access_token;
