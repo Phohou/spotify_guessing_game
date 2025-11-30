@@ -101,6 +101,11 @@ export const exchangeCodeForToken = async (code: string): Promise<string> => {
     ? `http://127.0.0.1:${port}/callback`
     : `${window.location.origin}/callback`;
   
+  console.log('Token Exchange Details:');
+  console.log('  Client ID:', clientId);
+  console.log('  Redirect URI:', redirectUri);
+  console.log('  Code verifier exists:', !!codeVerifier);
+  
   const response = await fetch(SPOTIFY_TOKEN_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -116,9 +121,21 @@ export const exchangeCodeForToken = async (code: string): Promise<string> => {
   });
   
   if (!response.ok) {
-    const error = await response.json();
-    console.error('Token exchange failed:', error);
-    throw new Error('Failed to exchange code for token');
+    const responseText = await response.text();
+    console.error('❌ Token exchange failed:');
+    console.error('  Status:', response.status, response.statusText);
+    console.error('  Response:', responseText);
+    
+    let errorMessage = 'Failed to exchange code for token';
+    try {
+      const error = JSON.parse(responseText);
+      errorMessage = error.error_description || error.error || errorMessage;
+    } catch {
+      // Response is not JSON, use raw text
+      errorMessage = responseText.substring(0, 200);
+    }
+    
+    throw new Error(errorMessage);
   }
   
   const data = await response.json();

@@ -467,7 +467,7 @@ function GameContent() {
               {showAnswer && (
                 <div className="mb-6 p-4 bg-gray-50 rounded-lg">
                   <p className="text-lg font-semibold">
-                    {selectedAnswer === currentTrack.name ? '✅ Correct!' : '❌ Incorrect'}
+                    {selectedAnswer === currentTrack.name ? 'Correct!' : 'Incorrect'}
                   </p>
                   <p className="text-[#b3b3b3] mt-2">
                     <strong>{currentTrack.name}</strong> by {currentTrack.artists.map(a => a.name).join(', ')}
