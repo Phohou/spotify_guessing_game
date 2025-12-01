@@ -60,13 +60,6 @@ export const getSpotifyAuthUrl = async () => {
     redirectUri = `${window.location.origin}/callback`;
   }
   
-  console.log('🎵 Spotify Auth Details (PKCE):');
-  console.log('  Client ID:', clientId);
-  console.log('  Redirect URI:', redirectUri);
-  console.log('  Current URL:', window.location.href);
-  console.log('  Scopes:', SPOTIFY_SCOPES);
-  console.log('⚠️  Make sure this EXACT redirect URI is added in Spotify Dashboard!');
-  
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: 'code',
@@ -77,7 +70,6 @@ export const getSpotifyAuthUrl = async () => {
   });
   
   const authUrl = `${SPOTIFY_AUTH_ENDPOINT}?${params.toString()}`;
-  console.log('🔗 Full Auth URL:', authUrl);
 
   return authUrl;
 };
@@ -101,27 +93,51 @@ export const exchangeCodeForToken = async (code: string): Promise<string> => {
     ? `http://127.0.0.1:${port}/callback`
     : `${window.location.origin}/callback`;
   
-  const response = await fetch(SPOTIFY_TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      client_id: clientId!,
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: redirectUri,
-      code_verifier: codeVerifier,
-    }),
-  });
-  
-  if (!response.ok) {
-    const error = await response.json();
-    console.error('Token exchange failed:', error);
-    throw new Error('Failed to exchange code for token');
+  let response;
+  try {
+    response = await fetch(SPOTIFY_TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: clientId!,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier,
+      }),
+    });
+  } catch (err) {
+    console.error('Network error during token exchange:', err);
+    throw new Error('Network error: Unable to connect to Spotify');
   }
   
-  const data = await response.json();
+  // Always read response as text first to handle non-JSON responses
+  const responseText = await response.text();
+  
+  if (!response.ok) {
+    let errorMessage = 'Failed to exchange code for token';
+    try {
+      const error = JSON.parse(responseText);
+      errorMessage = error.error_description || error.error || errorMessage;
+    } catch {
+      // Response is not JSON, use raw text
+      errorMessage = `Server error: ${responseText.substring(0, 200)}`;
+    }
+    
+    throw new Error(errorMessage);
+  }
+  
+  // Parse successful response
+  let data;
+  try {
+    data = JSON.parse(responseText);
+  } catch (err) {
+    console.error('Failed to parse token response:', responseText);
+    throw new Error('Invalid response format from Spotify');
+  }
+  
   localStorage.removeItem('spotify_code_verifier');
   
   return data.access_token;
@@ -185,14 +201,13 @@ export const initializeSpotifyPlayer = (
 
     // Ready
     player.addListener('ready', ({ device_id }: any) => {
-      console.log('Ready with Device ID', device_id);
       onReady(device_id);
       resolve(player);
     });
 
     // Not Ready
-    player.addListener('not_ready', ({ device_id }: any) => {
-      console.log('Device ID has gone offline', device_id);
+    player.addListener('not_ready', () => {
+      // Device went offline
     });
 
     // Player state changes
@@ -205,6 +220,27 @@ export const initializeSpotifyPlayer = (
     // Connect to the player
     player.connect();
   });
+};
+
+export const transferPlaybackToDevice = async (
+  token: string,
+  deviceId: string
+): Promise<void> => {
+  const response = await fetch('https://api.spotify.com/v1/me/player', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      device_ids: [deviceId],
+      play: false,
+    }),
+  });
+
+  if (!response.ok && response.status !== 404) {
+    // Transfer failed, but we'll continue anyway
+  }
 };
 
 export const playTrackAtPosition = async (

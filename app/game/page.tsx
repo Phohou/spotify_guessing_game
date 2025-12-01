@@ -11,13 +11,14 @@ import {
   isValidPlaylistUrl,
   shuffleArray,
   generateMultipleChoiceOptions,
+  generateSmartMultipleChoiceOptions,
   calculateScore,
   filterTracksWithPreviews,
 } from '@/lib/gameLogic';
 import { SpotifyTrack, GameAnswer } from '@/lib/types';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import Link from 'next/link';
-import { getSpotifyAuthUrl, initializeSpotifyPlayer, playTrackAtPosition, SpotifyPlayer } from '@/lib/spotify';
+import { getSpotifyAuthUrl, initializeSpotifyPlayer, playTrackAtPosition, transferPlaybackToDevice, SpotifyPlayer } from '@/lib/spotify';
 import { Music2, Play, Volume2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -38,7 +39,8 @@ function GameContent() {
   const [gameState, setGameState] = useState<'setup' | 'loading' | 'playing' | 'results'>('setup');
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [playlistInfo, setPlaylistInfo] = useState<any>(null);
-  const [tracks, setTracks] = useState<SpotifyTrack[]>([]);
+  const [tracks, setTracks] = useState<SpotifyTrack[]>([]); // Tracks selected for game questions
+  const [fullPlaylist, setFullPlaylist] = useState<SpotifyTrack[]>([]); // All tracks from playlist for generating options
   const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [answers, setAnswers] = useState<GameAnswer[]>([]);
@@ -50,6 +52,9 @@ function GameContent() {
   const [showAnswer, setShowAnswer] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [timeRemaining, setTimeRemaining] = useState(30);
+  const [maxTime] = useState(30);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Spotify SDK states
   const [playbackMode, setPlaybackMode] = useState<'preview' | 'sdk'>('preview');
@@ -57,8 +62,60 @@ function GameContent() {
   const [spotifyDeviceId, setSpotifyDeviceId] = useState<string | null>(null);
   const [spotifyToken, setSpotifyToken] = useState<string | null>(null);
   const [sdkReady, setSdkReady] = useState(false);
+  const [volume, setVolume] = useState(0.5); // 0.0 to 1.0
+  const [usedIncorrectOptions, setUsedIncorrectOptions] = useState<Set<string>>(new Set());
+  const [playbackRetries, setPlaybackRetries] = useState(0);
+  const maxPlaybackRetries = 2;
 
   const currentTrack = tracks[currentTrackIndex];
+
+  // Volume control effect
+  useEffect(() => {
+    // Control preview audio volume
+    if (audioRef.current) {
+      audioRef.current.volume = volume;
+    }
+    
+    // Control SDK volume
+    if (spotifyPlayer && playbackMode === 'sdk') {
+      spotifyPlayer.setVolume(volume).catch(err => {
+        console.error('Failed to set volume:', err);
+      });
+    }
+  }, [volume, spotifyPlayer, playbackMode]);
+
+  // Countdown timer effect
+  useEffect(() => {
+    if (gameState === 'playing' && !showAnswer) {
+      setTimeRemaining(maxTime);
+      
+      // Clear any existing timer
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+      
+      // Start countdown
+      timerRef.current = setInterval(() => {
+        setTimeRemaining(prev => {
+          if (prev <= 1) {
+            // Time's up - mark as wrong
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
+            }
+            handleTimeUp();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      
+      return () => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
+      };
+    }
+  }, [gameState, currentTrackIndex, showAnswer]);
 
   // Initialize Spotify SDK
   useEffect(() => {
@@ -66,6 +123,15 @@ function GameContent() {
     const token = localStorage.getItem('spotify_access_token');
     if (token) {
       setSpotifyToken(token);
+    }
+
+    // Check for existing player instance (persists across navigation)
+    const existingPlayer = (window as any).__spotifyPlayer;
+    const existingDeviceId = (window as any).__spotifyDeviceId;
+    
+    if (existingPlayer && existingDeviceId) {
+      setSpotifyPlayer(existingPlayer);
+      setSpotifyDeviceId(existingDeviceId);
     }
 
     // Wait for Spotify SDK to be ready via the global callback
@@ -90,15 +156,16 @@ function GameContent() {
       initializeSpotifyPlayer(
         spotifyToken,
         (deviceId) => {
-          console.log('Spotify device ready:', deviceId);
           setSpotifyDeviceId(deviceId);
+          // Store device ID globally for persistence
+          (window as any).__spotifyDeviceId = deviceId;
         },
-        (state) => {
-          console.log('Player state changed:', state);
-        }
+        () => {} // State change callback (not used in production)
       )
         .then((player) => {
           setSpotifyPlayer(player);
+          // Store player globally for persistence across navigation
+          (window as any).__spotifyPlayer = player;
         })
         .catch((err) => {
           console.error('Failed to initialize Spotify player:', err);
@@ -106,15 +173,40 @@ function GameContent() {
           localStorage.removeItem('spotify_access_token');
           setSpotifyToken(null);
           setSpotifyPlayer(null);
+          delete (window as any).__spotifyPlayer;
+          delete (window as any).__spotifyDeviceId;
           setError('Spotify Premium required for SDK playback. Please use Preview Mode or connect a Premium account.');
         });
     }
   }, [spotifyToken, sdkReady, spotifyPlayer, playbackMode]);
 
+  // Cleanup: Pause playback when leaving the page (but keep player connected for reuse)
+  useEffect(() => {
+    return () => {
+      if (spotifyPlayer) {
+        try {
+          spotifyPlayer.pause().catch(() => {});
+          // Keep player reference in window object so it persists across navigation
+        } catch (err) {
+          console.error('Error pausing Spotify player:', err);
+        }
+      }
+      
+      // Also pause HTML audio if playing
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+      
+      // Clear any active timers
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, [spotifyPlayer]);
+
   const handleSpotifyAuth = async () => {
     try {
       const authUrl = await getSpotifyAuthUrl();
-      console.log('Redirecting to Spotify auth...');
       window.location.href = authUrl;
     } catch (error) {
       console.error('Failed to initiate Spotify auth:', error);
@@ -180,11 +272,13 @@ function GameContent() {
       const shuffled = shuffleArray(playableTracks);
       const gameTracks = shuffled.slice(0, Math.min(totalQuestions, shuffled.length));
 
-      setTracks(gameTracks);
+      setFullPlaylist(playableTracks); // Store full playlist for generating options
+      setTracks(gameTracks); // Store only the tracks that will be questions
+      setUsedIncorrectOptions(new Set()); // Reset used options for new game
       setGameState('playing');
       setStartTime(Date.now());
       setQuestionStartTime(Date.now());
-      await prepareQuestion(0, gameTracks);
+      await prepareQuestion(0, gameTracks, playableTracks);
     } catch (err: any) {
       console.error('Error loading playlist:', err);
       setError(err.message || 'Failed to load playlist');
@@ -193,10 +287,31 @@ function GameContent() {
     }
   };
 
-  const prepareQuestion = async (index: number, trackList: SpotifyTrack[]) => {
+  const prepareQuestion = async (index: number, trackList: SpotifyTrack[], allTracks?: SpotifyTrack[]) => {
     const track = trackList[index];
-    const allOptions = generateMultipleChoiceOptions(track, trackList, 4);
-    setOptions(allOptions);
+    const tracksForOptions = allTracks || fullPlaylist; // Use provided allTracks or fallback to fullPlaylist state
+    
+    // Use the current state directly to ensure we have the most up-to-date used options
+    setUsedIncorrectOptions(currentUsed => {
+      // Generate options while avoiding previously used incorrect answers
+      const allOptions = generateSmartMultipleChoiceOptions(
+        track, 
+        tracksForOptions, 
+        currentUsed, 
+        4
+      );
+      
+      // Track the new incorrect options immediately
+      const newIncorrectOptions = allOptions.filter(opt => opt !== track.name);
+      const updated = new Set(currentUsed);
+      newIncorrectOptions.forEach(opt => updated.add(opt));
+      
+      // Update options state
+      setOptions(allOptions);
+      
+      return updated;
+    });
+    
     setSelectedAnswer(null);
     setShowAnswer(false);
     setQuestionStartTime(Date.now());
@@ -204,17 +319,115 @@ function GameContent() {
     // Play audio based on mode
     if (playbackMode === 'sdk' && spotifyToken && spotifyDeviceId && track.uri) {
       try {
+        // Check if player is connected, reconnect if needed
+        let currentDeviceId = spotifyDeviceId;
+        if (spotifyPlayer) {
+          const playerState = await spotifyPlayer.getCurrentState();
+          console.log('Player state check:', playerState ? 'Connected' : 'Disconnected');
+          
+          if (!playerState) {
+            console.log('Player disconnected, reconnecting...');
+            const connected = await spotifyPlayer.connect();
+            console.log('Reconnect result:', connected);
+            
+            // Wait for device to be ready
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Transfer playback to this device to activate it
+            await transferPlaybackToDevice(spotifyToken, currentDeviceId);
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+        
         // Random position between 30 seconds and 60 seconds before the end
         const randomPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
-        await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, randomPosition);
+        
+        await playTrackAtPosition(spotifyToken, currentDeviceId, track.uri, randomPosition);
+        setPlaybackRetries(0); // Reset retry count on success
       } catch (error) {
         console.error('Failed to play track via SDK:', error);
+        
+        // Retry logic with player reconnection
+        if (playbackRetries < maxPlaybackRetries) {
+          setPlaybackRetries(prev => prev + 1);
+          
+          // Retry with player reconnection
+          setTimeout(async () => {
+            try {
+              // Force reconnect on retry
+              if (spotifyPlayer) {
+                await spotifyPlayer.connect();
+                await new Promise(resolve => setTimeout(resolve, 1500));
+              }
+              
+              const retryPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
+              await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, retryPosition);
+              setPlaybackRetries(0);
+            } catch (retryError) {
+              console.error('Retry failed:', retryError);
+              if (playbackRetries + 1 >= maxPlaybackRetries) {
+                handleSkipUnplayableTrack();
+              }
+            }
+          }, 1000);
+        } else {
+          handleSkipUnplayableTrack();
+        }
       }
+    }
+  };
+
+  const handleSkipUnplayableTrack = async () => {
+    setPlaybackRetries(0);
+    
+    // Move to next question without counting this one
+    if (currentTrackIndex + 1 < tracks.length) {
+      const nextIndex = currentTrackIndex + 1;
+      setCurrentTrackIndex(nextIndex);
+      await prepareQuestion(nextIndex, tracks, fullPlaylist);
+    } else {
+      // No more tracks, finish game
+      finishGame();
+    }
+  };
+
+  const handleTimeUp = () => {
+    if (showAnswer) return;
+
+    // Clear timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
+    setSelectedAnswer(null);
+    setShowAnswer(true);
+
+    const timeToAnswer = Date.now() - questionStartTime;
+    const gameAnswer: GameAnswer = {
+      trackId: currentTrack.id,
+      correctAnswer: currentTrack.name,
+      userAnswer: 'Time Out',
+      isCorrect: false,
+      timeToAnswer,
+    };
+
+    setAnswers([...answers, gameAnswer]);
+
+    // Pause audio
+    if (playbackMode === 'preview' && audioRef.current) {
+      audioRef.current.pause();
+    } else if (playbackMode === 'sdk' && spotifyPlayer) {
+      spotifyPlayer.pause();
     }
   };
 
   const handleAnswer = (answer: string) => {
     if (showAnswer) return;
+
+    // Clear timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
 
     setSelectedAnswer(answer);
     setShowAnswer(true);
@@ -248,7 +461,7 @@ function GameContent() {
     if (currentTrackIndex + 1 < tracks.length) {
       const nextIndex = currentTrackIndex + 1;
       setCurrentTrackIndex(nextIndex);
-      await prepareQuestion(nextIndex, tracks);
+      await prepareQuestion(nextIndex, tracks, fullPlaylist);
     } else {
       finishGame();
     }
@@ -457,17 +670,58 @@ function GameContent() {
                 />
               )}
 
-              {playbackMode === 'sdk' && (
-                <div className="flex items-center justify-center gap-2 mb-4">
-                  <Volume2 className="w-5 h-5 text-[#1db954]" />
-                  <span className="text-[#b3b3b3]">Playing via Spotify</span>
+              {/* Volume Slider */}
+              <div className="mb-4 px-4 py-3 bg-[#181818] rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Volume2 className="w-5 h-5 text-[#1db954] flex-shrink-0" />
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={volume * 100}
+                    onChange={(e) => setVolume(parseInt(e.target.value) / 100)}
+                    className="flex-grow h-2 bg-[#535353] rounded-lg appearance-none cursor-pointer"
+                    style={{
+                      background: `linear-gradient(to right, #1db954 0%, #1db954 ${volume * 100}%, #535353 ${volume * 100}%, #535353 100%)`
+                    }}
+                  />
+                  <span className="text-[#b3b3b3] text-sm font-semibold min-w-[3ch]">
+                    {Math.round(volume * 100)}%
+                  </span>
+                </div>
+                {playbackMode === 'sdk' && (
+                  <div className="flex items-center justify-center gap-2 mt-2">
+                    <span className="text-[#b3b3b3] text-xs">Playing via Spotify Premium</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Timer Display */}
+              {!showAnswer && (
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-white font-semibold">Time Remaining</span>
+                    <span className={`text-2xl font-bold ${
+                      timeRemaining <= 5 ? 'text-red-500' : 'text-[#1db954]'
+                    }`}>
+                      {timeRemaining}s
+                    </span>
+                  </div>
+                  <div className="w-full bg-[#535353] rounded-full h-3 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-1000 ease-linear ${
+                        timeRemaining <= 5 ? 'bg-red-500' : 'bg-[#1db954]'
+                      }`}
+                      style={{ width: `${(timeRemaining / maxTime) * 100}%` }}
+                    />
+                  </div>
                 </div>
               )}
 
               {showAnswer && (
                 <div className="mb-6 p-4 bg-gray-50 rounded-lg">
                   <p className="text-lg font-semibold">
-                    {selectedAnswer === currentTrack.name ? '✅ Correct!' : '❌ Incorrect'}
+                    {selectedAnswer === currentTrack.name ? 'Correct!' : 'Incorrect'}
                   </p>
                   <p className="text-[#b3b3b3] mt-2">
                     <strong>{currentTrack.name}</strong> by {currentTrack.artists.map(a => a.name).join(', ')}

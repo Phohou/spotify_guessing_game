@@ -1,4 +1,4 @@
-# 🎵 Spotify Guessing Game
+# GuessTify
 
 Test your music knowledge by guessing songs from your favorite Spotify playlists! A fun, interactive web game built with Next.js and Firebase.
 
@@ -7,19 +7,14 @@ Test your music knowledge by guessing songs from your favorite Spotify playlists
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
 ![Firebase](https://img.shields.io/badge/Firebase-10-orange)
 
-## ✨ Features
+## Features
 
-- 🎮 **Dual Playback Modes**
+- **Two Current Gameplay Modes**
   - **Preview Mode** - Free mode using 30-second Spotify previews (limited song selection)
   - **Premium Mode** - Full playback for Spotify Premium users (works with all songs)
-- 🔐 **Secure Authentication** - Email/password or Google sign-in
-- 📊 **Smart Scoring** - Points based on accuracy and speed
-- 🏆 **Leaderboard** - Compete with players worldwide
-- 📚 **Playlist Sharing** - Browse community playlists
-- 👤 **User Profiles** - Track your stats and game history
-- 🎨 **Spotify Design** - Official Spotify color palette with Lucide icons
-
-## 🚀 Quick Start
+- **Secure Authentication** - Email/password or Google sign-in
+- **Leaderboard** - Compete with players worldwide
+- **Playlist Sharing** - Browse community playlists
 
 ### Prerequisites
 - Node.js 18+
@@ -29,40 +24,29 @@ Test your music knowledge by guessing songs from your favorite Spotify playlists
 ### Installation
 
 1. **Clone and install dependencies**
-   \`\`\`bash
+   ```bash
    npm install
-   \`\`\`
+   ```
 
 2. **Set up environment variables**
-   - Copy \`.env.local\` and add your credentials
-   - See \`QUICKSTART.md\` for detailed instructions
+   - Copy `.env.local` and add your credentials
 
 3. **Deploy Firestore rules**
-   \`\`\`bash
+   ```bash
    firebase deploy --only firestore:rules
-   \`\`\`
+   ```
 
 4. **Deploy Firebase Functions**
-   \`\`\`bash
+   ```bash
    firebase deploy --only functions
-   \`\`\`
+   ```
 
 5. **Run development server**
-   \`\`\`bash
+   ```bash
    npm run dev
-   \`\`\`
+   ```
 
-📖 **For detailed setup instructions, see [QUICKSTART.md](./QUICKSTART.md)**
-
-## 🎯 How to Play
-
-1. Sign in with email or Google
-2. Choose your playback mode:
-   - **Preview Mode** - Free, no Spotify account needed (limited songs)
-   - **Premium Mode** - Connect Spotify Premium (all songs supported)
-3. Enter a public Spotify playlist URL
-4. Choose number of questions (5-20)
-## 🏗️ Tech Stack
+## Tech Stack
 
 - **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS v4
 - **Backend**: Firebase (Auth, Firestore, Cloud Functions v2)
@@ -79,49 +63,35 @@ Test your music knowledge by guessing songs from your favorite Spotify playlists
 5. Save changes
 6. Copy your **Client ID** and **Client Secret** to `.env.local`
 
-## 🏗️ Tech Stack
+## Project Structure
 
-- **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS
-- **Backend**: Firebase (Auth, Firestore, Cloud Functions)
-- **API**: Spotify Web API
-- **Deployment**: Firebase Hosting / Vercel
-
-## 📁 Project Structure
-
-\`\`\`
+```
 spotify_guessing_game/
 ├── app/              # Next.js pages
 ├── components/       # React components
 ├── functions/        # Firebase Cloud Functions
 ├── lib/              # Utilities and configs
 └── public/           # Static assets
-\`\`\`
+```
 
-## 🔒 Security
+## Security
 
 - Firestore security rules implemented
 - Spotify credentials secured in Firebase Functions
 - Client-side authentication with Firebase Auth
 
-## 📝 Documentation
-
-- [Quick Start Guide](./QUICKSTART.md) - Get up and running in 5 minutes
-- [Setup Guide](./SETUP_GUIDE.md) - Detailed setup and deployment instructions
-
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Feel free to open issues or submit PRs.
 
-## 📄 License
+## License
 
 MIT License - see LICENSE file for details
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Spotify Web API for music data
 - Firebase for backend infrastructure
 - Next.js team for the amazing framework
 
 ---
-
-Built with ❤️ and 🎵
