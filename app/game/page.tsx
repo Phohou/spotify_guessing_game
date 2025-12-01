@@ -360,9 +360,11 @@ function GameContent() {
                 await new Promise(resolve => setTimeout(resolve, 1500));
               }
               
-              const retryPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
-              await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, retryPosition);
-              setPlaybackRetries(0);
+              if (spotifyToken && spotifyDeviceId) {
+                const retryPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
+                await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, retryPosition);
+                setPlaybackRetries(0);
+              }
             } catch (retryError) {
               console.error('Retry failed:', retryError);
               if (playbackRetries + 1 >= maxPlaybackRetries) {
