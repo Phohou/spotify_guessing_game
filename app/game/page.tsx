@@ -130,8 +130,6 @@ function GameContent() {
     const existingDeviceId = (window as any).__spotifyDeviceId;
     
     if (existingPlayer && existingDeviceId) {
-      console.log('♻️ Restoring existing Spotify player from previous session');
-      console.log('♻️ Device ID:', existingDeviceId);
       setSpotifyPlayer(existingPlayer);
       setSpotifyDeviceId(existingDeviceId);
     }
@@ -155,21 +153,16 @@ function GameContent() {
   // Initialize Spotify Player when token is available
   useEffect(() => {
     if (spotifyToken && sdkReady && !spotifyPlayer && playbackMode === 'sdk') {
-      console.log('🎵 Initializing new Spotify player...');
       initializeSpotifyPlayer(
         spotifyToken,
         (deviceId) => {
-          console.log('✅ Spotify device ready:', deviceId);
           setSpotifyDeviceId(deviceId);
           // Store device ID globally for persistence
           (window as any).__spotifyDeviceId = deviceId;
         },
-        (state) => {
-          console.log('Player state changed:', state);
-        }
+        () => {} // State change callback (not used in production)
       )
         .then((player) => {
-          console.log('✅ Spotify player initialized successfully');
           setSpotifyPlayer(player);
           // Store player globally for persistence across navigation
           (window as any).__spotifyPlayer = player;
@@ -191,12 +184,8 @@ function GameContent() {
   useEffect(() => {
     return () => {
       if (spotifyPlayer) {
-        console.log('🛑 Pausing Spotify player (user navigating away)...');
         try {
-          spotifyPlayer.pause().catch((err) => {
-            console.warn('Failed to pause player during cleanup:', err);
-          });
-          console.log('✅ Spotify player paused (stored globally for reuse)');
+          spotifyPlayer.pause().catch(() => {});
           // Keep player reference in window object so it persists across navigation
         } catch (err) {
           console.error('Error pausing Spotify player:', err);
@@ -205,7 +194,6 @@ function GameContent() {
       
       // Also pause HTML audio if playing
       if (audioRef.current) {
-        console.log('🛑 Pausing HTML audio (user navigating away)...');
         audioRef.current.pause();
       }
       
@@ -219,7 +207,6 @@ function GameContent() {
   const handleSpotifyAuth = async () => {
     try {
       const authUrl = await getSpotifyAuthUrl();
-      console.log('Redirecting to Spotify auth...');
       window.location.href = authUrl;
     } catch (error) {
       console.error('Failed to initiate Spotify auth:', error);
@@ -304,12 +291,6 @@ function GameContent() {
     const track = trackList[index];
     const tracksForOptions = allTracks || fullPlaylist; // Use provided allTracks or fallback to fullPlaylist state
     
-    console.log('Preparing question with:', {
-      currentTrack: track.name,
-      gameTracksCount: trackList.length,
-      fullPlaylistCount: tracksForOptions.length
-    });
-    
     // Use the current state directly to ensure we have the most up-to-date used options
     setUsedIncorrectOptions(currentUsed => {
       // Generate options while avoiding previously used incorrect answers
@@ -335,16 +316,6 @@ function GameContent() {
     setShowAnswer(false);
     setQuestionStartTime(Date.now());
 
-    // Debug: Check all conditions before attempting playback
-    console.log('Playback conditions:', {
-      playbackMode,
-      hasToken: !!spotifyToken,
-      hasDeviceId: !!spotifyDeviceId,
-      hasTrackUri: !!track.uri,
-      hasPlayer: !!spotifyPlayer,
-      trackName: track.name
-    });
-
     // Play audio based on mode
     if (playbackMode === 'sdk' && spotifyToken && spotifyDeviceId && track.uri) {
       try {
@@ -363,32 +334,21 @@ function GameContent() {
             await new Promise(resolve => setTimeout(resolve, 2000));
             
             // Transfer playback to this device to activate it
-            console.log('Transferring playback to device:', currentDeviceId);
             await transferPlaybackToDevice(spotifyToken, currentDeviceId);
             await new Promise(resolve => setTimeout(resolve, 500));
-            
-            console.log('Player reconnected and activated');
-          } else {
-            console.log('Player already connected');
           }
         }
         
         // Random position between 30 seconds and 60 seconds before the end
         const randomPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
-        console.log('Attempting to play track:', track.name);
-        console.log('Position:', randomPosition, 'ms');
-        console.log('Device ID:', currentDeviceId);
-        console.log('Track URI:', track.uri);
         
         await playTrackAtPosition(spotifyToken, currentDeviceId, track.uri, randomPosition);
-        console.log('Playback started successfully');
         setPlaybackRetries(0); // Reset retry count on success
       } catch (error) {
         console.error('Failed to play track via SDK:', error);
         
         // Retry logic with player reconnection
         if (playbackRetries < maxPlaybackRetries) {
-          console.log(`Retrying playback (attempt ${playbackRetries + 1}/${maxPlaybackRetries})...`);
           setPlaybackRetries(prev => prev + 1);
           
           // Retry with player reconnection
@@ -396,25 +356,21 @@ function GameContent() {
             try {
               // Force reconnect on retry
               if (spotifyPlayer) {
-                console.log('Reconnecting player for retry...');
                 await spotifyPlayer.connect();
                 await new Promise(resolve => setTimeout(resolve, 1500));
               }
               
               const retryPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
               await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, retryPosition);
-              console.log('Retry successful');
               setPlaybackRetries(0);
             } catch (retryError) {
               console.error('Retry failed:', retryError);
               if (playbackRetries + 1 >= maxPlaybackRetries) {
-                console.log('Max retries reached, skipping to next track...');
                 handleSkipUnplayableTrack();
               }
             }
           }, 1000);
         } else {
-          console.log('Max retries reached, skipping to next track...');
           handleSkipUnplayableTrack();
         }
       }
@@ -422,7 +378,6 @@ function GameContent() {
   };
 
   const handleSkipUnplayableTrack = async () => {
-    console.log('Skipping unplayable track:', currentTrack?.name);
     setPlaybackRetries(0);
     
     // Move to next question without counting this one
@@ -432,7 +387,6 @@ function GameContent() {
       await prepareQuestion(nextIndex, tracks, fullPlaylist);
     } else {
       // No more tracks, finish game
-      console.log('⚠️ No more tracks available');
       finishGame();
     }
   };

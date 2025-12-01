@@ -112,37 +112,27 @@ export function generateSmartMultipleChoiceOptions(
   usedOptions: Set<string>,
   count: number = 4
 ): string[] {
-  console.log('Generating options for:', correctTrack.name);
-  console.log('Used options count:', usedOptions.size);
-  console.log('Total tracks available:', allTracks.length);
-  
   const options = new Set<string>();
   
   // CRITICAL: Always add the correct answer first
   options.add(correctTrack.name);
-  console.log('Correct answer added:', correctTrack.name);
   
   // Get all other tracks (excluding the correct one AND any tracks used as incorrect options)
   const availableTracks = allTracks.filter(
     t => t.id !== correctTrack.id && !usedOptions.has(t.name)
   );
   
-  console.log('Available unused tracks:', availableTracks.length);
-  
   // Shuffle for randomness
   const shuffled = shuffleArray(availableTracks);
   
   // Add tracks from the available pool (these have never been incorrect options)
-  const neededCount = count - 1; // -1 because we already have the correct answer
   for (let i = 0; i < shuffled.length && options.size < count; i++) {
     options.add(shuffled[i].name);
-    console.log('Added unused track:', shuffled[i].name);
   }
   
   // If we don't have enough tracks (very small playlist or late in game)
   // create decoys from artist names
   if (options.size < count) {
-    console.log('Not enough unused tracks, creating artist decoys');
     const artists = allTracks.map(t => t.artists[0]?.name).filter(Boolean);
     const uniqueArtists = [...new Set(artists)];
     const shuffledArtists = shuffleArray(uniqueArtists);
@@ -152,7 +142,6 @@ export function generateSmartMultipleChoiceOptions(
       const decoy = `${artist} - Unknown Track`;
       if (!usedOptions.has(decoy) && decoy !== correctTrack.name) {
         options.add(decoy);
-        console.log('Added artist decoy:', decoy);
       }
     }
   }
@@ -167,10 +156,6 @@ export function generateSmartMultipleChoiceOptions(
   
   // Final shuffle to randomize the display order
   const shuffledOptions = shuffleArray(finalOptions);
-  
-  console.log('Final options:', shuffledOptions);
-  console.log('Correct answer present:', shuffledOptions.includes(correctTrack.name));
-  console.log('---');
   
   return shuffledOptions;
 }

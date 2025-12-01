@@ -60,13 +60,6 @@ export const getSpotifyAuthUrl = async () => {
     redirectUri = `${window.location.origin}/callback`;
   }
   
-  console.log('🎵 Spotify Auth Details (PKCE):');
-  console.log('  Client ID:', clientId);
-  console.log('  Redirect URI:', redirectUri);
-  console.log('  Current URL:', window.location.href);
-  console.log('  Scopes:', SPOTIFY_SCOPES);
-  console.log('⚠️  Make sure this EXACT redirect URI is added in Spotify Dashboard!');
-  
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: 'code',
@@ -77,7 +70,6 @@ export const getSpotifyAuthUrl = async () => {
   });
   
   const authUrl = `${SPOTIFY_AUTH_ENDPOINT}?${params.toString()}`;
-  console.log('🔗 Full Auth URL:', authUrl);
 
   return authUrl;
 };
@@ -101,11 +93,6 @@ export const exchangeCodeForToken = async (code: string): Promise<string> => {
     ? `http://127.0.0.1:${port}/callback`
     : `${window.location.origin}/callback`;
   
-  console.log('Token Exchange Details:');
-  console.log('  Client ID:', clientId);
-  console.log('  Redirect URI:', redirectUri);
-  console.log('  Code verifier exists:', !!codeVerifier);
-  
   let response;
   try {
     response = await fetch(SPOTIFY_TOKEN_ENDPOINT, {
@@ -122,29 +109,21 @@ export const exchangeCodeForToken = async (code: string): Promise<string> => {
       }),
     });
   } catch (err) {
-    console.error('❌ Network error during token exchange:', err);
+    console.error('Network error during token exchange:', err);
     throw new Error('Network error: Unable to connect to Spotify');
   }
   
   // Always read response as text first to handle non-JSON responses
   const responseText = await response.text();
-  console.log('📥 Response status:', response.status, response.statusText);
-  console.log('📥 Response preview:', responseText.substring(0, 200));
   
   if (!response.ok) {
-    console.error('❌ Token exchange failed:');
-    console.error('  Status:', response.status, response.statusText);
-    console.error('  Full Response:', responseText);
-    
     let errorMessage = 'Failed to exchange code for token';
     try {
       const error = JSON.parse(responseText);
       errorMessage = error.error_description || error.error || errorMessage;
-      console.error('  Parsed Error:', error);
     } catch {
       // Response is not JSON, use raw text
       errorMessage = `Server error: ${responseText.substring(0, 200)}`;
-      console.error('  Response was not JSON');
     }
     
     throw new Error(errorMessage);
@@ -155,7 +134,7 @@ export const exchangeCodeForToken = async (code: string): Promise<string> => {
   try {
     data = JSON.parse(responseText);
   } catch (err) {
-    console.error('❌ Failed to parse success response:', responseText);
+    console.error('Failed to parse token response:', responseText);
     throw new Error('Invalid response format from Spotify');
   }
   
@@ -222,14 +201,13 @@ export const initializeSpotifyPlayer = (
 
     // Ready
     player.addListener('ready', ({ device_id }: any) => {
-      console.log('Ready with Device ID', device_id);
       onReady(device_id);
       resolve(player);
     });
 
     // Not Ready
-    player.addListener('not_ready', ({ device_id }: any) => {
-      console.log('Device ID has gone offline', device_id);
+    player.addListener('not_ready', () => {
+      // Device went offline
     });
 
     // Player state changes
@@ -261,7 +239,7 @@ export const transferPlaybackToDevice = async (
   });
 
   if (!response.ok && response.status !== 404) {
-    console.error('Failed to transfer playback:', await response.text());
+    // Transfer failed, but we'll continue anyway
   }
 };
 
