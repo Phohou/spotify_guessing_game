@@ -360,7 +360,7 @@ function GameContent() {
                 await new Promise(resolve => setTimeout(resolve, 1500));
               }
               
-              if (spotifyToken && spotifyDeviceId) {
+              if (spotifyToken && spotifyDeviceId && track.uri) {
                 const retryPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
                 await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, retryPosition);
                 setPlaybackRetries(0);
