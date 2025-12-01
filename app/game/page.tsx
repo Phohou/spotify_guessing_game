@@ -11,6 +11,7 @@ import {
   isValidPlaylistUrl,
   shuffleArray,
   generateMultipleChoiceOptions,
+  generateSmartMultipleChoiceOptions,
   calculateScore,
   filterTracksWithPreviews,
 } from '@/lib/gameLogic';
@@ -38,7 +39,8 @@ function GameContent() {
   const [gameState, setGameState] = useState<'setup' | 'loading' | 'playing' | 'results'>('setup');
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [playlistInfo, setPlaylistInfo] = useState<any>(null);
-  const [tracks, setTracks] = useState<SpotifyTrack[]>([]);
+  const [tracks, setTracks] = useState<SpotifyTrack[]>([]); // Tracks selected for game questions
+  const [fullPlaylist, setFullPlaylist] = useState<SpotifyTrack[]>([]); // All tracks from playlist for generating options
   const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [answers, setAnswers] = useState<GameAnswer[]>([]);
@@ -50,6 +52,9 @@ function GameContent() {
   const [showAnswer, setShowAnswer] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [timeRemaining, setTimeRemaining] = useState(30);
+  const [maxTime] = useState(30);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Spotify SDK states
   const [playbackMode, setPlaybackMode] = useState<'preview' | 'sdk'>('preview');
@@ -57,8 +62,60 @@ function GameContent() {
   const [spotifyDeviceId, setSpotifyDeviceId] = useState<string | null>(null);
   const [spotifyToken, setSpotifyToken] = useState<string | null>(null);
   const [sdkReady, setSdkReady] = useState(false);
+  const [volume, setVolume] = useState(0.5); // 0.0 to 1.0
+  const [usedIncorrectOptions, setUsedIncorrectOptions] = useState<Set<string>>(new Set());
+  const [playbackRetries, setPlaybackRetries] = useState(0);
+  const maxPlaybackRetries = 2;
 
   const currentTrack = tracks[currentTrackIndex];
+
+  // Volume control effect
+  useEffect(() => {
+    // Control preview audio volume
+    if (audioRef.current) {
+      audioRef.current.volume = volume;
+    }
+    
+    // Control SDK volume
+    if (spotifyPlayer && playbackMode === 'sdk') {
+      spotifyPlayer.setVolume(volume).catch(err => {
+        console.error('Failed to set volume:', err);
+      });
+    }
+  }, [volume, spotifyPlayer, playbackMode]);
+
+  // Countdown timer effect
+  useEffect(() => {
+    if (gameState === 'playing' && !showAnswer) {
+      setTimeRemaining(maxTime);
+      
+      // Clear any existing timer
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+      
+      // Start countdown
+      timerRef.current = setInterval(() => {
+        setTimeRemaining(prev => {
+          if (prev <= 1) {
+            // Time's up - mark as wrong
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
+            }
+            handleTimeUp();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      
+      return () => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
+      };
+    }
+  }, [gameState, currentTrackIndex, showAnswer]);
 
   // Initialize Spotify SDK
   useEffect(() => {
@@ -110,6 +167,35 @@ function GameContent() {
         });
     }
   }, [spotifyToken, sdkReady, spotifyPlayer, playbackMode]);
+
+  // Cleanup: Disconnect Spotify player when leaving the page
+  useEffect(() => {
+    return () => {
+      if (spotifyPlayer) {
+        console.log('Disconnecting Spotify player (user leaving game page)...');
+        try {
+          spotifyPlayer.pause().catch((err) => {
+            console.warn('Failed to pause player during cleanup:', err);
+          });
+          spotifyPlayer.disconnect();
+          console.log('Spotify player disconnected');
+        } catch (err) {
+          console.error('Error disconnecting Spotify player:', err);
+        }
+      }
+      
+      // Also pause HTML audio if playing
+      if (audioRef.current) {
+        console.log('Pausing HTML audio (user leaving game page)...');
+        audioRef.current.pause();
+      }
+      
+      // Clear any active timers
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, [spotifyPlayer]);
 
   const handleSpotifyAuth = async () => {
     try {
@@ -180,11 +266,13 @@ function GameContent() {
       const shuffled = shuffleArray(playableTracks);
       const gameTracks = shuffled.slice(0, Math.min(totalQuestions, shuffled.length));
 
-      setTracks(gameTracks);
+      setFullPlaylist(playableTracks); // Store full playlist for generating options
+      setTracks(gameTracks); // Store only the tracks that will be questions
+      setUsedIncorrectOptions(new Set()); // Reset used options for new game
       setGameState('playing');
       setStartTime(Date.now());
       setQuestionStartTime(Date.now());
-      await prepareQuestion(0, gameTracks);
+      await prepareQuestion(0, gameTracks, playableTracks);
     } catch (err: any) {
       console.error('Error loading playlist:', err);
       setError(err.message || 'Failed to load playlist');
@@ -193,10 +281,37 @@ function GameContent() {
     }
   };
 
-  const prepareQuestion = async (index: number, trackList: SpotifyTrack[]) => {
+  const prepareQuestion = async (index: number, trackList: SpotifyTrack[], allTracks?: SpotifyTrack[]) => {
     const track = trackList[index];
-    const allOptions = generateMultipleChoiceOptions(track, trackList, 4);
-    setOptions(allOptions);
+    const tracksForOptions = allTracks || fullPlaylist; // Use provided allTracks or fallback to fullPlaylist state
+    
+    console.log('Preparing question with:', {
+      currentTrack: track.name,
+      gameTracksCount: trackList.length,
+      fullPlaylistCount: tracksForOptions.length
+    });
+    
+    // Use the current state directly to ensure we have the most up-to-date used options
+    setUsedIncorrectOptions(currentUsed => {
+      // Generate options while avoiding previously used incorrect answers
+      const allOptions = generateSmartMultipleChoiceOptions(
+        track, 
+        tracksForOptions, 
+        currentUsed, 
+        4
+      );
+      
+      // Track the new incorrect options immediately
+      const newIncorrectOptions = allOptions.filter(opt => opt !== track.name);
+      const updated = new Set(currentUsed);
+      newIncorrectOptions.forEach(opt => updated.add(opt));
+      
+      // Update options state
+      setOptions(allOptions);
+      
+      return updated;
+    });
+    
     setSelectedAnswer(null);
     setShowAnswer(false);
     setQuestionStartTime(Date.now());
@@ -206,15 +321,93 @@ function GameContent() {
       try {
         // Random position between 30 seconds and 60 seconds before the end
         const randomPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
+        console.log('Attempting to play track:', track.name, 'at position:', randomPosition);
         await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, randomPosition);
+        setPlaybackRetries(0); // Reset retry count on success
       } catch (error) {
         console.error('Failed to play track via SDK:', error);
+        
+        // Retry logic
+        if (playbackRetries < maxPlaybackRetries) {
+          console.log(`Retrying playback (attempt ${playbackRetries + 1}/${maxPlaybackRetries})...`);
+          setPlaybackRetries(prev => prev + 1);
+          
+          // Retry with a different position
+          setTimeout(async () => {
+            try {
+              const retryPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
+              await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, retryPosition);
+              console.log('Retry successful');
+              setPlaybackRetries(0);
+            } catch (retryError) {
+              console.error('Retry failed:', retryError);
+              if (playbackRetries + 1 >= maxPlaybackRetries) {
+                console.log('Max retries reached, skipping to next track...');
+                handleSkipUnplayableTrack();
+              }
+            }
+          }, 1000);
+        } else {
+          console.log('Max retries reached, skipping to next track...');
+          handleSkipUnplayableTrack();
+        }
       }
+    }
+  };
+
+  const handleSkipUnplayableTrack = async () => {
+    console.log('Skipping unplayable track:', currentTrack?.name);
+    setPlaybackRetries(0);
+    
+    // Move to next question without counting this one
+    if (currentTrackIndex + 1 < tracks.length) {
+      const nextIndex = currentTrackIndex + 1;
+      setCurrentTrackIndex(nextIndex);
+      await prepareQuestion(nextIndex, tracks, fullPlaylist);
+    } else {
+      // No more tracks, finish game
+      console.log('⚠️ No more tracks available');
+      finishGame();
+    }
+  };
+
+  const handleTimeUp = () => {
+    if (showAnswer) return;
+
+    // Clear timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
+    setSelectedAnswer(null);
+    setShowAnswer(true);
+
+    const timeToAnswer = Date.now() - questionStartTime;
+    const gameAnswer: GameAnswer = {
+      trackId: currentTrack.id,
+      correctAnswer: currentTrack.name,
+      userAnswer: 'Time Out',
+      isCorrect: false,
+      timeToAnswer,
+    };
+
+    setAnswers([...answers, gameAnswer]);
+
+    // Pause audio
+    if (playbackMode === 'preview' && audioRef.current) {
+      audioRef.current.pause();
+    } else if (playbackMode === 'sdk' && spotifyPlayer) {
+      spotifyPlayer.pause();
     }
   };
 
   const handleAnswer = (answer: string) => {
     if (showAnswer) return;
+
+    // Clear timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
 
     setSelectedAnswer(answer);
     setShowAnswer(true);
@@ -248,7 +441,7 @@ function GameContent() {
     if (currentTrackIndex + 1 < tracks.length) {
       const nextIndex = currentTrackIndex + 1;
       setCurrentTrackIndex(nextIndex);
-      await prepareQuestion(nextIndex, tracks);
+      await prepareQuestion(nextIndex, tracks, fullPlaylist);
     } else {
       finishGame();
     }
@@ -457,10 +650,51 @@ function GameContent() {
                 />
               )}
 
-              {playbackMode === 'sdk' && (
-                <div className="flex items-center justify-center gap-2 mb-4">
-                  <Volume2 className="w-5 h-5 text-[#1db954]" />
-                  <span className="text-[#b3b3b3]">Playing via Spotify</span>
+              {/* Volume Slider */}
+              <div className="mb-4 px-4 py-3 bg-[#181818] rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Volume2 className="w-5 h-5 text-[#1db954] flex-shrink-0" />
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={volume * 100}
+                    onChange={(e) => setVolume(parseInt(e.target.value) / 100)}
+                    className="flex-grow h-2 bg-[#535353] rounded-lg appearance-none cursor-pointer"
+                    style={{
+                      background: `linear-gradient(to right, #1db954 0%, #1db954 ${volume * 100}%, #535353 ${volume * 100}%, #535353 100%)`
+                    }}
+                  />
+                  <span className="text-[#b3b3b3] text-sm font-semibold min-w-[3ch]">
+                    {Math.round(volume * 100)}%
+                  </span>
+                </div>
+                {playbackMode === 'sdk' && (
+                  <div className="flex items-center justify-center gap-2 mt-2">
+                    <span className="text-[#b3b3b3] text-xs">Playing via Spotify Premium</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Timer Display */}
+              {!showAnswer && (
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-white font-semibold">Time Remaining</span>
+                    <span className={`text-2xl font-bold ${
+                      timeRemaining <= 5 ? 'text-red-500' : 'text-[#1db954]'
+                    }`}>
+                      {timeRemaining}s
+                    </span>
+                  </div>
+                  <div className="w-full bg-[#535353] rounded-full h-3 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-1000 ease-linear ${
+                        timeRemaining <= 5 ? 'bg-red-500' : 'bg-[#1db954]'
+                      }`}
+                      style={{ width: `${(timeRemaining / maxTime) * 100}%` }}
+                    />
+                  </div>
                 </div>
               )}
 
