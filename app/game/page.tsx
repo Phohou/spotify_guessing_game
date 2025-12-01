@@ -18,7 +18,7 @@ import {
 import { SpotifyTrack, GameAnswer } from '@/lib/types';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import Link from 'next/link';
-import { getSpotifyAuthUrl, initializeSpotifyPlayer, playTrackAtPosition, SpotifyPlayer } from '@/lib/spotify';
+import { getSpotifyAuthUrl, initializeSpotifyPlayer, playTrackAtPosition, transferPlaybackToDevice, SpotifyPlayer } from '@/lib/spotify';
 import { Music2, Play, Volume2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -125,6 +125,17 @@ function GameContent() {
       setSpotifyToken(token);
     }
 
+    // Check for existing player instance (persists across navigation)
+    const existingPlayer = (window as any).__spotifyPlayer;
+    const existingDeviceId = (window as any).__spotifyDeviceId;
+    
+    if (existingPlayer && existingDeviceId) {
+      console.log('♻️ Restoring existing Spotify player from previous session');
+      console.log('♻️ Device ID:', existingDeviceId);
+      setSpotifyPlayer(existingPlayer);
+      setSpotifyDeviceId(existingDeviceId);
+    }
+
     // Wait for Spotify SDK to be ready via the global callback
     const handleSpotifyReady = () => {
       setSdkReady(true);
@@ -144,18 +155,24 @@ function GameContent() {
   // Initialize Spotify Player when token is available
   useEffect(() => {
     if (spotifyToken && sdkReady && !spotifyPlayer && playbackMode === 'sdk') {
+      console.log('🎵 Initializing new Spotify player...');
       initializeSpotifyPlayer(
         spotifyToken,
         (deviceId) => {
-          console.log('Spotify device ready:', deviceId);
+          console.log('✅ Spotify device ready:', deviceId);
           setSpotifyDeviceId(deviceId);
+          // Store device ID globally for persistence
+          (window as any).__spotifyDeviceId = deviceId;
         },
         (state) => {
           console.log('Player state changed:', state);
         }
       )
         .then((player) => {
+          console.log('✅ Spotify player initialized successfully');
           setSpotifyPlayer(player);
+          // Store player globally for persistence across navigation
+          (window as any).__spotifyPlayer = player;
         })
         .catch((err) => {
           console.error('Failed to initialize Spotify player:', err);
@@ -163,30 +180,32 @@ function GameContent() {
           localStorage.removeItem('spotify_access_token');
           setSpotifyToken(null);
           setSpotifyPlayer(null);
+          delete (window as any).__spotifyPlayer;
+          delete (window as any).__spotifyDeviceId;
           setError('Spotify Premium required for SDK playback. Please use Preview Mode or connect a Premium account.');
         });
     }
   }, [spotifyToken, sdkReady, spotifyPlayer, playbackMode]);
 
-  // Cleanup: Disconnect Spotify player when leaving the page
+  // Cleanup: Pause playback when leaving the page (but keep player connected for reuse)
   useEffect(() => {
     return () => {
       if (spotifyPlayer) {
-        console.log('Disconnecting Spotify player (user leaving game page)...');
+        console.log('🛑 Pausing Spotify player (user navigating away)...');
         try {
           spotifyPlayer.pause().catch((err) => {
             console.warn('Failed to pause player during cleanup:', err);
           });
-          spotifyPlayer.disconnect();
-          console.log('Spotify player disconnected');
+          console.log('✅ Spotify player paused (stored globally for reuse)');
+          // Keep player reference in window object so it persists across navigation
         } catch (err) {
-          console.error('Error disconnecting Spotify player:', err);
+          console.error('Error pausing Spotify player:', err);
         }
       }
       
       // Also pause HTML audio if playing
       if (audioRef.current) {
-        console.log('Pausing HTML audio (user leaving game page)...');
+        console.log('🛑 Pausing HTML audio (user navigating away)...');
         audioRef.current.pause();
       }
       
@@ -316,25 +335,72 @@ function GameContent() {
     setShowAnswer(false);
     setQuestionStartTime(Date.now());
 
+    // Debug: Check all conditions before attempting playback
+    console.log('Playback conditions:', {
+      playbackMode,
+      hasToken: !!spotifyToken,
+      hasDeviceId: !!spotifyDeviceId,
+      hasTrackUri: !!track.uri,
+      hasPlayer: !!spotifyPlayer,
+      trackName: track.name
+    });
+
     // Play audio based on mode
     if (playbackMode === 'sdk' && spotifyToken && spotifyDeviceId && track.uri) {
       try {
+        // Check if player is connected, reconnect if needed
+        let currentDeviceId = spotifyDeviceId;
+        if (spotifyPlayer) {
+          const playerState = await spotifyPlayer.getCurrentState();
+          console.log('Player state check:', playerState ? 'Connected' : 'Disconnected');
+          
+          if (!playerState) {
+            console.log('Player disconnected, reconnecting...');
+            const connected = await spotifyPlayer.connect();
+            console.log('Reconnect result:', connected);
+            
+            // Wait for device to be ready
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Transfer playback to this device to activate it
+            console.log('Transferring playback to device:', currentDeviceId);
+            await transferPlaybackToDevice(spotifyToken, currentDeviceId);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            console.log('Player reconnected and activated');
+          } else {
+            console.log('Player already connected');
+          }
+        }
+        
         // Random position between 30 seconds and 60 seconds before the end
         const randomPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
-        console.log('Attempting to play track:', track.name, 'at position:', randomPosition);
-        await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, randomPosition);
+        console.log('Attempting to play track:', track.name);
+        console.log('Position:', randomPosition, 'ms');
+        console.log('Device ID:', currentDeviceId);
+        console.log('Track URI:', track.uri);
+        
+        await playTrackAtPosition(spotifyToken, currentDeviceId, track.uri, randomPosition);
+        console.log('Playback started successfully');
         setPlaybackRetries(0); // Reset retry count on success
       } catch (error) {
         console.error('Failed to play track via SDK:', error);
         
-        // Retry logic
+        // Retry logic with player reconnection
         if (playbackRetries < maxPlaybackRetries) {
           console.log(`Retrying playback (attempt ${playbackRetries + 1}/${maxPlaybackRetries})...`);
           setPlaybackRetries(prev => prev + 1);
           
-          // Retry with a different position
+          // Retry with player reconnection
           setTimeout(async () => {
             try {
+              // Force reconnect on retry
+              if (spotifyPlayer) {
+                console.log('Reconnecting player for retry...');
+                await spotifyPlayer.connect();
+                await new Promise(resolve => setTimeout(resolve, 1500));
+              }
+              
               const retryPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
               await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, retryPosition);
               console.log('Retry successful');

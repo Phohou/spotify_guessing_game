@@ -244,6 +244,27 @@ export const initializeSpotifyPlayer = (
   });
 };
 
+export const transferPlaybackToDevice = async (
+  token: string,
+  deviceId: string
+): Promise<void> => {
+  const response = await fetch('https://api.spotify.com/v1/me/player', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      device_ids: [deviceId],
+      play: false,
+    }),
+  });
+
+  if (!response.ok && response.status !== 404) {
+    console.error('Failed to transfer playback:', await response.text());
+  }
+};
+
 export const playTrackAtPosition = async (
   token: string,
   deviceId: string,
