@@ -1,10 +1,72 @@
 const {setGlobalOptions} = require("firebase-functions/v2");
-const {onCall} = require("firebase-functions/v2/https");
+const {onCall, HttpsError} = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const logger = require("firebase-functions/logger");
+const spotifyPreviewFinder = require("spotify-preview-finder");
 
 // Initialize Firebase Admin
 admin.initializeApp();
+
+// Cache for preview URLs to avoid redundant scraping
+const previewUrlCache = new Map();
+const CACHE_TTL = 3600000; // 1 hour in milliseconds
+
+// Helper function to fetch preview URL with timeout
+async function fetchPreviewWithTimeout(trackName, artistName, trackId, timeoutMs = 10000) {
+  const cacheKey = `${trackId}`;
+  
+  // Check cache first
+  const cached = previewUrlCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    logger.info(`Using cached preview for track ${trackId}`);
+    return cached.url;
+  }
+  
+  // Create timeout promise
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("Timeout")), timeoutMs);
+  });
+  
+  // Race between fetch and timeout
+  try {
+    const result = await Promise.race([
+      spotifyPreviewFinder(trackName, artistName, 1),
+      timeoutPromise,
+    ]);
+    
+    if (result.success && result.results.length > 0 && result.results[0].previewUrls.length > 0) {
+      const url = result.results[0].previewUrls[0];
+      // Cache the result
+      previewUrlCache.set(cacheKey, {url, timestamp: Date.now()});
+      return url;
+    }
+    return null;
+  } catch (err) {
+    if (err.message === "Timeout") {
+      logger.warn(`Timeout fetching preview for track ${trackId}`);
+    }
+    return null;
+  }
+}
+
+// Helper function to batch process preview URL fetches with concurrency limit
+async function batchFetchPreviews(tracksToFetch, concurrencyLimit = 5) {
+  const results = [];
+  
+  for (let i = 0; i < tracksToFetch.length; i += concurrencyLimit) {
+    const batch = tracksToFetch.slice(i, i + concurrencyLimit);
+    const batchResults = await Promise.allSettled(
+        batch.map(async (track) => {
+          const url = await fetchPreviewWithTimeout(track.name, track.artist, track.id);
+          return {trackId: track.id, url};
+        })
+    );
+    
+    results.push(...batchResults.map((r) => r.status === "fulfilled" ? r.value : {trackId: null, url: null}));
+  }
+  
+  return results;
+}
 
 setGlobalOptions({ maxInstances: 10 });
 
@@ -102,7 +164,10 @@ exports.getPlaylist = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SEC
     };
   } catch (error) {
     logger.error("Error fetching playlist:", error);
-    throw new Error(error.message || "Failed to fetch playlist");
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError("internal", error.message || "Failed to fetch playlist");
   }
 });
 
@@ -137,10 +202,10 @@ exports.getPlaylistTracks = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIE
       const data = await response.json();
 
       // Extract track info
-      for (const item of data.items) {
-        // If includeAll is true (SDK mode), include all tracks
-        // Otherwise (preview mode), only include tracks with preview URLs
-        if (item.track && (includeAll || item.track.preview_url)) {
+      if (includeAll) {
+        // For SDK mode, include all tracks immediately
+        for (const item of data.items) {
+          if (!item.track) continue;
           tracks.push({
             id: item.track.id,
             name: item.track.name,
@@ -151,8 +216,68 @@ exports.getPlaylistTracks = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIE
             },
             preview_url: item.track.preview_url || null,
             duration_ms: item.track.duration_ms,
-            uri: item.track.uri, // Add Spotify URI for SDK playback
+            uri: item.track.uri,
           });
+        }
+      } else {
+        // For preview mode, collect tracks and batch fetch missing previews
+        const trackItems = [];
+        const tracksNeedingPreview = [];
+        
+        for (const item of data.items) {
+          if (!item.track) continue;
+          
+          const trackData = {
+            id: item.track.id,
+            name: item.track.name,
+            artists: item.track.artists.map((a) => ({name: a.name})),
+            album: {
+              name: item.track.album.name,
+              images: item.track.album.images,
+            },
+            preview_url: item.track.preview_url || null,
+            duration_ms: item.track.duration_ms,
+            uri: item.track.uri,
+          };
+          
+          trackItems.push(trackData);
+          
+          // If no preview URL from Spotify, mark for batch fetching
+          if (!trackData.preview_url || trackData.preview_url.trim() === "") {
+            tracksNeedingPreview.push({
+              id: item.track.id,
+              name: item.track.name,
+              artist: item.track.artists[0]?.name || "",
+            });
+          }
+        }
+        
+        // Batch fetch missing preview URLs with concurrency limit
+        if (tracksNeedingPreview.length > 0) {
+          logger.info(`Batch fetching ${tracksNeedingPreview.length} missing preview URLs...`);
+          const fetchedPreviews = await batchFetchPreviews(tracksNeedingPreview, 5);
+          
+          // Create a map for quick lookup
+          const previewMap = new Map();
+          fetchedPreviews.forEach((result) => {
+            if (result.url) {
+              previewMap.set(result.trackId, result.url);
+            }
+          });
+          
+          // Update track items with fetched preview URLs
+          trackItems.forEach((trackData) => {
+            if (previewMap.has(trackData.id)) {
+              trackData.preview_url = previewMap.get(trackData.id);
+            }
+          });
+        }
+        
+        // Only include tracks with valid preview URLs
+        for (const trackData of trackItems) {
+          if (trackData.preview_url && trackData.preview_url.trim() !== "") {
+            tracks.push(trackData);
+          }
         }
       }
 
@@ -163,7 +288,10 @@ exports.getPlaylistTracks = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIE
     logger.info(`Fetched ${tracks.length} ${trackType} from playlist ${playlistId}`);
 
     if (tracks.length === 0 && !includeAll) {
-      throw new Error("This playlist has no tracks with 30-second preview URLs available. Spotify only provides previews for some tracks. Try using Premium Mode or a different playlist with more popular songs.");
+      throw new HttpsError(
+          "failed-precondition",
+          "This playlist has no tracks with preview URLs available. Spotify only provides preview clips for some tracks (usually more popular songs). Try using Premium Mode for full track playback, or use a different playlist with mainstream songs."
+      );
     }
 
     return {
@@ -173,7 +301,10 @@ exports.getPlaylistTracks = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIE
     };
   } catch (error) {
     logger.error("Error fetching playlist tracks:", error);
-    throw new Error(error.message || "Failed to fetch playlist tracks");
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError("internal", error.message || "Failed to fetch playlist tracks");
   }
 });
 

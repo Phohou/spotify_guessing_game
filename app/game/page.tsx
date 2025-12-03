@@ -54,7 +54,7 @@ function GameContent() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(30);
-  const [maxTime] = useState(30);
+  const [maxTime, setMaxTime] = useState(30);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Spotify SDK states
@@ -327,8 +327,34 @@ function GameContent() {
     
     setSelectedAnswer(null);
     setShowAnswer(false);
+    
     // Play audio based on mode
-    if (playbackMode === 'sdk' && spotifyToken && spotifyDeviceId && track.uri) {
+    if (playbackMode === 'preview' && track.preview_url) {
+      // Play preview URL and set timer based on actual duration
+      if (audioRef.current) {
+        audioRef.current.load();
+        
+        // Wait for metadata to load to get actual duration
+        const handleLoadedMetadata = () => {
+          const duration = audioRef.current?.duration || 30;
+          const timerDuration = Math.min(Math.floor(duration), 30); // Cap at 30s max
+          setMaxTime(timerDuration);
+          setTimeRemaining(timerDuration);
+          audioRef.current?.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        };
+        
+        audioRef.current.addEventListener('loadedmetadata', handleLoadedMetadata);
+        
+        audioRef.current.play().catch(err => {
+          console.error('Failed to play audio:', err);
+          setError('Failed to play audio. Please try again.');
+        });
+      }
+      setQuestionStartTime(Date.now());
+    } else if (playbackMode === 'sdk' && spotifyToken && spotifyDeviceId && track.uri) {
+      // SDK mode always uses 30s
+      setMaxTime(30);
+      setTimeRemaining(30);
       setSdkConnecting(true); // Show connecting state
       
       try {
@@ -785,14 +811,13 @@ function GameContent() {
                 What song is this?
               </h2>
 
-              {/* Audio playback - either preview URL or SDK */}
+              {/* Audio playback - hidden from user */}
               {playbackMode === 'preview' && currentTrack.preview_url && (
                 <audio
                   ref={audioRef}
                   src={currentTrack.preview_url}
                   autoPlay
-                  controls
-                  className="w-full mb-4"
+                  className="hidden"
                 />
               )}
 
