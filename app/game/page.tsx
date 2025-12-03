@@ -4,8 +4,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/hooks';
 import { functions, db } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { useRouter } from 'next/navigation';
+import { collection, addDoc, serverTimestamp, doc, getDoc, setDoc, updateDoc, increment, query, where, getDocs } from 'firebase/firestore';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   extractPlaylistId,
   isValidPlaylistUrl,
@@ -33,6 +33,7 @@ export default function GamePage() {
 function GameContent() {
   const { user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // Game states
@@ -53,7 +54,7 @@ function GameContent() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(30);
-  const [maxTime] = useState(30);
+  const [maxTime, setMaxTime] = useState(30);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Spotify SDK states
@@ -62,12 +63,21 @@ function GameContent() {
   const [spotifyDeviceId, setSpotifyDeviceId] = useState<string | null>(null);
   const [spotifyToken, setSpotifyToken] = useState<string | null>(null);
   const [sdkReady, setSdkReady] = useState(false);
+  const [sdkConnecting, setSdkConnecting] = useState(false);
   const [volume, setVolume] = useState(0.5); // 0.0 to 1.0
   const [usedIncorrectOptions, setUsedIncorrectOptions] = useState<Set<string>>(new Set());
   const [playbackRetries, setPlaybackRetries] = useState(0);
   const maxPlaybackRetries = 2;
 
   const currentTrack = tracks[currentTrackIndex];
+
+  // Load playlist from URL parameter
+  useEffect(() => {
+    const playlistParam = searchParams.get('playlist');
+    if (playlistParam) {
+      setPlaylistUrl(playlistParam);
+    }
+  }, [searchParams]);
 
   // Volume control effect
   useEffect(() => {
@@ -86,7 +96,7 @@ function GameContent() {
 
   // Countdown timer effect
   useEffect(() => {
-    if (gameState === 'playing' && !showAnswer) {
+    if (gameState === 'playing' && !showAnswer && !sdkConnecting) {
       setTimeRemaining(maxTime);
       
       // Clear any existing timer
@@ -115,7 +125,7 @@ function GameContent() {
         }
       };
     }
-  }, [gameState, currentTrackIndex, showAnswer]);
+  }, [gameState, currentTrackIndex, showAnswer, sdkConnecting]);
 
   // Initialize Spotify SDK
   useEffect(() => {
@@ -261,9 +271,12 @@ function GameContent() {
           return;
         }
       } else {
-        // SDK mode - all tracks are playable
+        // SDK mode - filter out local files (they can't be played via Web Playback SDK)
+        playableTracks = playableTracks.filter(track => 
+          track.uri && !track.uri.startsWith('spotify:local:') && track.id
+        );
         if (playableTracks.length < 4) {
-          setError('Playlist needs at least 4 tracks');
+          setError('Playlist needs at least 4 Spotify tracks (local files are not supported)');
           setLoading(false);
           return;
         }
@@ -314,10 +327,36 @@ function GameContent() {
     
     setSelectedAnswer(null);
     setShowAnswer(false);
-    setQuestionStartTime(Date.now());
-
+    
     // Play audio based on mode
-    if (playbackMode === 'sdk' && spotifyToken && spotifyDeviceId && track.uri) {
+    if (playbackMode === 'preview' && track.preview_url) {
+      // Play preview URL and set timer based on actual duration
+      if (audioRef.current) {
+        audioRef.current.load();
+        
+        // Wait for metadata to load to get actual duration
+        const handleLoadedMetadata = () => {
+          const duration = audioRef.current?.duration || 30;
+          const timerDuration = Math.min(Math.floor(duration), 30); // Cap at 30s max
+          setMaxTime(timerDuration);
+          setTimeRemaining(timerDuration);
+          audioRef.current?.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        };
+        
+        audioRef.current.addEventListener('loadedmetadata', handleLoadedMetadata);
+        
+        audioRef.current.play().catch(err => {
+          console.error('Failed to play audio:', err);
+          setError('Failed to play audio. Please try again.');
+        });
+      }
+      setQuestionStartTime(Date.now());
+    } else if (playbackMode === 'sdk' && spotifyToken && spotifyDeviceId && track.uri) {
+      // SDK mode always uses 30s
+      setMaxTime(30);
+      setTimeRemaining(30);
+      setSdkConnecting(true); // Show connecting state
+      
       try {
         // Check if player is connected, reconnect if needed
         let currentDeviceId = spotifyDeviceId;
@@ -344,35 +383,50 @@ function GameContent() {
         
         await playTrackAtPosition(spotifyToken, currentDeviceId, track.uri, randomPosition);
         setPlaybackRetries(0); // Reset retry count on success
+        
+        // Only start the timer after playback has successfully started
+        setSdkConnecting(false);
+        setQuestionStartTime(Date.now())
       } catch (error) {
         console.error('Failed to play track via SDK:', error);
+        setSdkConnecting(false);
         
         // Retry logic with player reconnection
-        if (playbackRetries < maxPlaybackRetries) {
-          setPlaybackRetries(prev => prev + 1);
+        setPlaybackRetries(prev => {
+          const newRetryCount = prev + 1;
           
-          // Retry with player reconnection
-          setTimeout(async () => {
-            try {
-              // Force reconnect on retry
-              if (spotifyPlayer) {
-                await spotifyPlayer.connect();
-                await new Promise(resolve => setTimeout(resolve, 1500));
+          if (newRetryCount < maxPlaybackRetries) {
+            // Retry with player reconnection
+            setTimeout(async () => {
+              try {
+                // Force reconnect on retry
+                if (spotifyPlayer) {
+                  await spotifyPlayer.connect();
+                  await new Promise(resolve => setTimeout(resolve, 1500));
+                }
+                
+                if (spotifyToken && spotifyDeviceId && track.uri) {
+                  const retryPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
+                  await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, retryPosition);
+                  setPlaybackRetries(0);
+                }
+              } catch (retryError) {
+                console.error('Retry failed:', retryError);
+                // Increment retry count and check if we've hit the limit
+                setPlaybackRetries(currentRetries => {
+                  if (currentRetries + 1 >= maxPlaybackRetries) {
+                    handleSkipUnplayableTrack();
+                  }
+                  return currentRetries + 1;
+                });
               }
-              
-              const retryPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
-              await playTrackAtPosition(spotifyToken, spotifyDeviceId, track.uri, retryPosition);
-              setPlaybackRetries(0);
-            } catch (retryError) {
-              console.error('Retry failed:', retryError);
-              if (playbackRetries + 1 >= maxPlaybackRetries) {
-                handleSkipUnplayableTrack();
-              }
-            }
-          }, 1000);
-        } else {
-          handleSkipUnplayableTrack();
-        }
+            }, 1000);
+          } else {
+            handleSkipUnplayableTrack();
+          }
+          
+          return newRetryCount;
+        });
       }
     }
   };
@@ -493,23 +547,110 @@ function GameContent() {
         endTime: Date.now(),
         createdAt: serverTimestamp(),
       });
+
+      // Update user stats
+      if (user?.uid) {
+        const userRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userRef);
+
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          const currentHighScore = userData.highScore || 0;
+          
+          // Update stats
+          await updateDoc(userRef, {
+            totalGamesPlayed: increment(1),
+            totalScore: increment(score),
+            highScore: score > currentHighScore ? score : currentHighScore,
+          });
+        } else {
+          // Create user document if it doesn't exist
+          await setDoc(userRef, {
+            displayName: user.displayName || 'Anonymous',
+            email: user.email,
+            photoURL: user.photoURL,
+            totalGamesPlayed: 1,
+            totalScore: score,
+            highScore: score,
+            createdAt: serverTimestamp(),
+          });
+        }
+
+        // Save/update playlist in savedPlaylists collection
+        const playlistQuery = query(
+          collection(db, 'savedPlaylists'),
+          where('playlistId', '==', playlistInfo.id),
+          where('userId', '==', user.uid)
+        );
+        const playlistSnapshot = await getDocs(playlistQuery);
+
+        if (playlistSnapshot.empty) {
+          // Create new playlist entry
+          await addDoc(collection(db, 'savedPlaylists'), {
+            userId: user.uid,
+            userName: user.displayName || user.email || 'Anonymous',
+            playlistId: playlistInfo.id,
+            playlistName: playlistInfo.name,
+            playlistImage: playlistInfo.images?.[0]?.url || null,
+            trackCount: playlistInfo.tracks?.total || fullPlaylist.length,
+            timesPlayed: 1,
+            addedAt: Date.now(),
+            createdAt: serverTimestamp(),
+          });
+        } else {
+          // Update existing playlist entry
+          const playlistDoc = playlistSnapshot.docs[0];
+          await updateDoc(doc(db, 'savedPlaylists', playlistDoc.id), {
+            timesPlayed: increment(1),
+          });
+        }
+      }
     } catch (err) {
       console.error('Error saving game session:', err);
     }
   };
 
-  const resetGame = () => {
-    setGameState('setup');
-    setPlaylistUrl('');
-    setPlaylistInfo(null);
-    setTracks([]);
-    setCurrentTrackIndex(0);
-    setSelectedAnswer(null);
-    setAnswers([]);
-    setScore(0);
-    setOptions([]);
-    setShowAnswer(false);
-    setError('');
+  const resetGame = async () => {
+    // If we have a playlist loaded, replay with different random songs
+    if (fullPlaylist.length > 0) {
+      // Reset game state
+      setCurrentTrackIndex(0);
+      setSelectedAnswer(null);
+      setAnswers([]);
+      setScore(0);
+      setOptions([]);
+      setShowAnswer(false);
+      setError('');
+      setUsedIncorrectOptions(new Set());
+      setPlaybackRetries(0);
+      
+      // Generate new random selection of tracks
+      const shuffled = shuffleArray([...fullPlaylist]);
+      const gameTracks = shuffled.slice(0, Math.min(totalQuestions, shuffled.length));
+      setTracks(gameTracks);
+      
+      // Start the game
+      setGameState('playing');
+      setStartTime(Date.now());
+      setQuestionStartTime(Date.now());
+      
+      // Prepare first question
+      await prepareQuestion(0, gameTracks, fullPlaylist);
+    } else {
+      // No playlist loaded, go back to setup
+      setGameState('setup');
+      setPlaylistUrl('');
+      setPlaylistInfo(null);
+      setTracks([]);
+      setFullPlaylist([]);
+      setCurrentTrackIndex(0);
+      setSelectedAnswer(null);
+      setAnswers([]);
+      setScore(0);
+      setOptions([]);
+      setShowAnswer(false);
+      setError('');
+    }
   };
 
   return (
@@ -636,7 +777,18 @@ function GameContent() {
         )}
 
         {gameState === 'playing' && currentTrack && (
-          <div className="bg-[#212121] rounded-2xl border border-[#535353] shadow-xl p-8">
+          <div className="bg-[#212121] rounded-2xl border border-[#535353] shadow-xl p-8 relative">
+            {/* SDK Connecting Overlay */}
+            {sdkConnecting && (
+              <div className="absolute inset-0 bg-[#212121] bg-opacity-95 rounded-2xl flex items-center justify-center z-50">
+                <div className="text-center">
+                  <div className="inline-block animate-spin rounded-full h-16 w-16 border-b-4 border-[#1db954] mb-4"></div>
+                  <p className="text-white text-xl font-semibold">Connecting to Spotify...</p>
+                  <p className="text-[#b3b3b3] mt-2">Please wait while we prepare playback</p>
+                </div>
+              </div>
+            )}
+            
             <div className="mb-6">
               <div className="flex justify-between items-center mb-4">
                 <span className="text-[#b3b3b3] font-medium">
@@ -659,14 +811,13 @@ function GameContent() {
                 What song is this?
               </h2>
 
-              {/* Audio playback - either preview URL or SDK */}
+              {/* Audio playback - hidden from user */}
               {playbackMode === 'preview' && currentTrack.preview_url && (
                 <audio
                   ref={audioRef}
                   src={currentTrack.preview_url}
                   autoPlay
-                  controls
-                  className="w-full mb-4"
+                  className="hidden"
                 />
               )}
 

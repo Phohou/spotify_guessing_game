@@ -6,6 +6,7 @@ import { db } from '@/lib/firebase';
 import { collection, query, orderBy, limit, getDocs, where } from 'firebase/firestore';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import Link from 'next/link';
+import { Library } from 'lucide-react';
 
 interface SavedPlaylist {
   id: string;
@@ -127,7 +128,7 @@ function PlaylistsContent() {
           </div>
         ) : displayedPlaylists.length === 0 ? (
           <div className="bg-[#212121] rounded-2xl border border-[#535353] shadow-xl p-12 text-center">
-            <div className="text-6xl mb-4">📚</div>
+            <Library className="w-16 h-16 text-[#1db954] mx-auto mb-4" />
             <h3 className="text-2xl font-bold text-white mb-2">No playlists yet</h3>
             <p className="text-[#b3b3b3] mb-6">
               {activeTab === 'my'
@@ -146,7 +147,7 @@ function PlaylistsContent() {
             {displayedPlaylists.map((playlist) => (
               <div
                 key={playlist.id}
-                className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition"
+                className="bg-[#212121] border border-[#535353] rounded-xl shadow-lg p-6 hover:shadow-xl hover:border-[#1db954] transition"
               >
                 {playlist.playlistImage && (
                   <img
@@ -162,16 +163,24 @@ function PlaylistsContent() {
                   By {playlist.userName} • {playlist.trackCount} tracks
                 </p>
                 <div className="flex items-center justify-between text-sm text-[#b3b3b3] mb-4">
-                  <span>🎮 Played {playlist.timesPlayed} times</span>
+                  <span>Played {playlist.timesPlayed} times</span>
                 </div>
-                <a
-                  href={`https://open.spotify.com/playlist/${playlist.playlistId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block w-full bg-[#1db954] text-white text-center py-3 rounded-lg font-semibold hover:bg-[#1ed760] transition"
-                >
-                  Play on Spotify
-                </a>
+                <div className="flex gap-2">
+                  <Link
+                    href={`/game?playlist=https://open.spotify.com/playlist/${playlist.playlistId}`}
+                    className="flex-1 bg-[#1db954] text-white text-center py-3 rounded-lg font-semibold hover:bg-[#1ed760] transition"
+                  >
+                    Play Game
+                  </Link>
+                  <a
+                    href={`https://open.spotify.com/playlist/${playlist.playlistId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 bg-[#535353] text-white text-center py-3 rounded-lg font-semibold hover:bg-[#6a6a6a] transition"
+                  >
+                    Open Spotify
+                  </a>
+                </div>
               </div>
             ))}
           </div>
