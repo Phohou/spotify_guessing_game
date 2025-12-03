@@ -48,9 +48,27 @@ function ProfileContent() {
         id: doc.id,
         ...doc.data(),
       }));
+      console.log('Loaded recent games:', gamesData.length, gamesData);
       setRecentGames(gamesData);
     } catch (error) {
       console.error('Error loading profile:', error);
+      // If index error, try loading without ordering
+      try {
+        const simpleQuery = query(
+          collection(db, 'gameSessions'),
+          where('userId', '==', user.uid),
+          limit(10)
+        );
+        const gamesSnapshot = await getDocs(simpleQuery);
+        const gamesData = gamesSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+        console.log('Loaded recent games (no order):', gamesData.length);
+        setRecentGames(gamesData);
+      } catch (fallbackError) {
+        console.error('Error loading games (fallback):', fallbackError);
+      }
     } finally {
       setLoading(false);
     }

@@ -6,6 +6,7 @@ import { db } from '@/lib/firebase';
 import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import Link from 'next/link';
+import { Trophy } from 'lucide-react';
 
 interface LeaderboardEntry {
   id: string;
@@ -88,7 +89,10 @@ function LeaderboardContent() {
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <div className="mb-8 text-center">
-          <h1 className="text-5xl font-bold text-white mb-4">🏆 Leaderboard</h1>
+          <div className="flex items-center justify-center gap-3 mb-4">
+            <Trophy className="w-12 h-12 text-[#1db954]" />
+            <h1 className="text-5xl font-bold text-white">Leaderboard</h1>
+          </div>
           <p className="text-white/90 text-lg">
             Top scores from all players
           </p>
@@ -106,7 +110,7 @@ function LeaderboardContent() {
           </div>
         ) : entries.length === 0 ? (
           <div className="bg-[#212121] rounded-2xl border border-[#535353] shadow-xl p-12 text-center">
-            <div className="text-6xl mb-4">🏆</div>
+            <Trophy className="w-16 h-16 text-[#1db954] mx-auto mb-4" />
             <h3 className="text-2xl font-bold text-white mb-2">No scores yet</h3>
             <p className="text-[#b3b3b3] mb-6">
               Be the first to set a high score!

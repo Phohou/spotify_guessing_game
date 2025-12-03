@@ -1,6 +1,5 @@
 const {setGlobalOptions} = require("firebase-functions/v2");
 const {onCall} = require("firebase-functions/v2/https");
-const {defineString} = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const logger = require("firebase-functions/logger");
 
@@ -9,16 +8,13 @@ admin.initializeApp();
 
 setGlobalOptions({ maxInstances: 10 });
 
-// Spotify API credentials from environment variables
-const SPOTIFY_CLIENT_ID = defineString("SPOTIFY_CLIENT_ID");
-const SPOTIFY_CLIENT_SECRET = defineString("SPOTIFY_CLIENT_SECRET");
-
 /**
  * Gets Spotify access token using Client Credentials flow
  */
 async function getSpotifyAccessToken() {
-  const clientId = SPOTIFY_CLIENT_ID.value();
-  const clientSecret = SPOTIFY_CLIENT_SECRET.value();
+  // Access secrets from environment (set via Firebase secrets)
+  const clientId = process.env.SPOTIFY_CLIENT_ID;
+  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
     throw new Error("Spotify credentials not configured");
@@ -43,8 +39,9 @@ async function getSpotifyAccessToken() {
 
 /**
  * Fetches a Spotify playlist by ID
+ * Requires SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET secrets
  */
-exports.getPlaylist = onCall(async (request) => {
+exports.getPlaylist = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"]}, async (request) => {
   try {
     const {playlistId} = request.data;
 
@@ -52,6 +49,7 @@ exports.getPlaylist = onCall(async (request) => {
       throw new Error("Playlist ID is required");
     }
 
+    logger.info(`Fetching playlist with ID: ${playlistId}`);
     const accessToken = await getSpotifyAccessToken();
 
     // Fetch playlist details
@@ -65,10 +63,15 @@ exports.getPlaylist = onCall(async (request) => {
     );
 
     if (!playlistResponse.ok) {
+      const errorBody = await playlistResponse.text();
+      logger.error(`Spotify API error: ${playlistResponse.status} - ${errorBody}`);
       if (playlistResponse.status === 404) {
         throw new Error("Playlist not found");
       }
-      throw new Error("Failed to fetch playlist");
+      if (playlistResponse.status === 401) {
+        throw new Error("Authentication failed with Spotify");
+      }
+      throw new Error(`Failed to fetch playlist: ${playlistResponse.status}`);
     }
 
     const playlist = await playlistResponse.json();
@@ -105,8 +108,9 @@ exports.getPlaylist = onCall(async (request) => {
 
 /**
  * Fetches all tracks from a Spotify playlist
+ * Requires SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET secrets
  */
-exports.getPlaylistTracks = onCall(async (request) => {
+exports.getPlaylistTracks = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"]}, async (request) => {
   try {
     const {playlistId, includeAll} = request.data;
 
