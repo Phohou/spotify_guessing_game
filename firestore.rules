@@ -36,5 +36,22 @@ service cloud.firestore {
       allow update: if isOwner(resource.data.userId);
       allow delete: if isOwner(resource.data.userId);
     }
+    
+    // Lobbies - for multiplayer game mode
+    match /lobbies/{lobbyId} {
+      // Anyone can read lobbies
+      allow read: if isSignedIn();
+      
+      // Only authenticated users can create lobbies
+      allow create: if isSignedIn() && 
+                      request.resource.data.hostId == request.auth.uid;
+      
+      // Host can always update, or any authenticated user (for joining/updating player data)
+      allow update: if isSignedIn();
+      
+      // Only host can delete the lobby
+      allow delete: if isSignedIn() && 
+                      request.auth.uid == resource.data.hostId;
+    }
   }
 }

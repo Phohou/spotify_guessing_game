@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Music2, Play, Library, Trophy, User, LogOut, Zap } from 'lucide-react';
+import { Music2, Play, Library, Trophy, User, LogOut, Zap, Users } from 'lucide-react';
 
 export default function Home() {
   const { user, loading } = useAuth();
@@ -140,14 +140,26 @@ export default function Home() {
             Choose how you want to play
           </p>
         </div>
-        <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
           <Card className="group hover:shadow-2xl transition-all hover:-translate-y-1 cursor-pointer border-2 border-[#535353] hover:border-[#1db954] bg-[#212121] text-white">
             <Link href="/game">
               <CardHeader>
                 <Play className="w-12 h-12 mb-2 text-[#1db954]" />
-                <CardTitle className="text-2xl">Start New Game</CardTitle>
+                <CardTitle className="text-2xl">Solo Game</CardTitle>
                 <CardDescription className="text-base text-[#b3b3b3]">
-                  Enter a Spotify playlist URL and start guessing songs!
+                  Play alone and test your music knowledge
+                </CardDescription>
+              </CardHeader>
+            </Link>
+          </Card>
+
+          <Card className="group hover:shadow-2xl transition-all hover:-translate-y-1 cursor-pointer border-2 border-[#535353] hover:border-[#1db954] bg-[#212121] text-white">
+            <Link href="/multiplayer">
+              <CardHeader>
+                <Users className="w-12 h-12 mb-2 text-[#1db954]" />
+                <CardTitle className="text-2xl">Multiplayer</CardTitle>
+                <CardDescription className="text-base text-[#b3b3b3]">
+                  Create or join a lobby and compete with friends!
                 </CardDescription>
               </CardHeader>
             </Link>
