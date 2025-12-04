@@ -29,12 +29,14 @@ import {
   generateSmartMultipleChoiceOptions,
   calculateScore,
   filterTracksWithPreviews,
+  getGaussianSampleTimestamp,
 } from '@/lib/gameLogic';
 import { SpotifyTrack, GameAnswer } from '@/lib/types';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import Link from 'next/link';
 import { Users, Copy, Check, Crown, Trophy, Music2, Volume2, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { getSpotifyAuthUrl, initializeSpotifyPlayer, playTrackAtPosition, transferPlaybackToDevice, SpotifyPlayer } from '@/lib/spotify';
 
 interface Player {
   uid: string;
@@ -96,18 +98,101 @@ function MultiplayerContent() {
   const [timeRemaining, setTimeRemaining] = useState(30);
   const [maxTime, setMaxTime] = useState(30);
   const [questionStartTime, setQuestionStartTime] = useState(0);
-  const [volume, setVolume] = useState(0.5);
+  const [volume, setVolume] = useState(0.15);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Spotify SDK states
+  const [spotifyPlayer, setSpotifyPlayer] = useState<SpotifyPlayer | null>(null);
+  const [spotifyDeviceId, setSpotifyDeviceId] = useState<string | null>(null);
+  const [spotifyToken, setSpotifyToken] = useState<string | null>(null);
+  const [sdkReady, setSdkReady] = useState(false);
+  const [sdkConnecting, setSdkConnecting] = useState(false);
 
   const isHost = lobby?.hostId === user?.uid;
   const currentPlayer = lobby?.players.find(p => p.uid === user?.uid);
+
+  // Check for Spotify token on mount
+  useEffect(() => {
+    const token = localStorage.getItem('spotify_access_token');
+    if (token) {
+      setSpotifyToken(token);
+    }
+
+    // Check if player and device already exist globally
+    const existingPlayer = (window as any).__spotifyPlayer;
+    const existingDeviceId = (window as any).__spotifyDeviceId;
+    
+    if (existingPlayer && existingDeviceId) {
+      setSpotifyPlayer(existingPlayer);
+      setSpotifyDeviceId(existingDeviceId);
+    }
+
+    // Wait for Spotify SDK to be ready
+    const handleSpotifyReady = () => {
+      setSdkReady(true);
+    };
+
+    if ((window as any).spotifyReady) {
+      setSdkReady(true);
+    } else {
+      window.addEventListener('spotify-ready', handleSpotifyReady);
+    }
+
+    return () => {
+      window.removeEventListener('spotify-ready', handleSpotifyReady);
+    };
+  }, []);
+
+  // Initialize Spotify Player when token is available
+  useEffect(() => {
+    if (spotifyToken && sdkReady && !spotifyPlayer && lobby?.playbackMode === 'sdk') {
+      // Check if player already exists globally first
+      const existingPlayer = (window as any).__spotifyPlayer;
+      const existingDeviceId = (window as any).__spotifyDeviceId;
+      
+      if (existingPlayer && existingDeviceId) {
+        setSpotifyPlayer(existingPlayer);
+        setSpotifyDeviceId(existingDeviceId);
+        return;
+      }
+      
+      initializeSpotifyPlayer(
+        spotifyToken,
+        (deviceId) => {
+          setSpotifyDeviceId(deviceId);
+          (window as any).__spotifyDeviceId = deviceId;
+        },
+        () => {}
+      )
+        .then((player) => {
+          setSpotifyPlayer(player);
+          (window as any).__spotifyPlayer = player;
+        })
+        .catch((err) => {
+          console.error('Failed to initialize Spotify player:', err);
+          localStorage.removeItem('spotify_access_token');
+          setSpotifyToken(null);
+          setSpotifyPlayer(null);
+          delete (window as any).__spotifyPlayer;
+          delete (window as any).__spotifyDeviceId;
+          setError('Spotify Premium required for SDK playback. Please use Preview Mode or connect a Premium account.');
+        });
+    }
+  }, [spotifyToken, sdkReady, spotifyPlayer, lobby?.playbackMode]);
 
   // Volume control
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.volume = volume;
     }
-  }, [volume]);
+    
+    // Control SDK volume
+    if (spotifyPlayer && lobby?.playbackMode === 'sdk') {
+      spotifyPlayer.setVolume(volume).catch(err => {
+        console.error('Failed to set volume:', err);
+      });
+    }
+  }, [volume, spotifyPlayer, lobby?.playbackMode]);
 
   // Timer effect
   useEffect(() => {
@@ -172,7 +257,7 @@ function MultiplayerContent() {
       // Update view based on lobby status
       if (lobbyData.status === 'playing' && view !== 'playing') {
         setView('playing');
-        prepareQuestion(lobbyData.currentTrackIndex, lobbyData.tracks);
+        prepareQuestion(lobbyData.currentTrackIndex, lobbyData.tracks, lobbyData);
         previousTrackIndex = lobbyData.currentTrackIndex;
       } else if (lobbyData.status === 'playing' && view === 'playing') {
         // Initialize previousTrackIndex if not set
@@ -181,7 +266,7 @@ function MultiplayerContent() {
         }
         // Check if track index changed (host moved to next question)
         else if (lobbyData.currentTrackIndex !== previousTrackIndex) {
-          prepareQuestion(lobbyData.currentTrackIndex, lobbyData.tracks);
+          prepareQuestion(lobbyData.currentTrackIndex, lobbyData.tracks, lobbyData);
           previousTrackIndex = lobbyData.currentTrackIndex;
         }
       } else if (lobbyData.status === 'finished' && view !== 'results') {
@@ -217,6 +302,14 @@ function MultiplayerContent() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      if (spotifyPlayer) {
+        try {
+          spotifyPlayer.pause().catch(() => {});
+        } catch (err) {
+          console.error('Error pausing Spotify player:', err);
+        }
+      }
+      
       if (audioRef.current) {
         audioRef.current.pause();
       }
@@ -224,11 +317,28 @@ function MultiplayerContent() {
         clearInterval(timerRef.current);
       }
     };
-  }, []);
+  }, [spotifyPlayer]);
+
+  const handleSpotifyAuth = async () => {
+    try {
+      // Store current path for redirect after auth
+      localStorage.setItem('spotify_auth_return_path', '/multiplayer');
+      const authUrl = await getSpotifyAuthUrl();
+      window.location.href = authUrl;
+    } catch (err) {
+      console.error('Error getting Spotify auth URL:', err);
+      setError('Failed to connect to Spotify');
+    }
+  };
 
   const createLobby = async () => {
     if (!user || !isValidPlaylistUrl(playlistUrl)) {
       setError('Please enter a valid Spotify playlist URL');
+      return;
+    }
+
+    if (playbackMode === 'sdk' && !spotifyToken) {
+      setError('Please connect your Spotify Premium account to use Premium Mode');
       return;
     }
 
@@ -343,6 +453,14 @@ function MultiplayerContent() {
         return;
       }
 
+      // Check if Premium mode requires Spotify token
+      if (lobbyData.playbackMode === 'sdk' && !spotifyToken) {
+        setError('This lobby requires Spotify Premium. Please connect your account first.');
+        setLobbyId(targetLobbyId);
+        setView('lobby');
+        return;
+      }
+
       // Add player to lobby
       await updateDoc(lobbyRef, {
         players: arrayUnion({
@@ -425,8 +543,12 @@ function MultiplayerContent() {
     }
   };
 
-  const prepareQuestion = async (index: number, tracks: SpotifyTrack[]) => {
+  const prepareQuestion = async (index: number, tracks: SpotifyTrack[], currentLobby?: Lobby) => {
     const track = tracks[index];
+    const activeLobby = currentLobby || lobby;
+    
+    console.log('🎯 prepareQuestion called - Track:', track.name, 'Mode:', activeLobby?.playbackMode);
+    
     setCurrentTrack(track);
     
     // Generate options
@@ -442,23 +564,125 @@ function MultiplayerContent() {
     setShowAnswer(false);
     setQuestionStartTime(Date.now());
 
-    // Play audio
-    if (audioRef.current && track.preview_url) {
-      audioRef.current.load();
+    // Play audio based on mode
+    if (activeLobby?.playbackMode === 'preview' && track.preview_url) {
+      // Preview mode
+      if (audioRef.current) {
+        audioRef.current.load();
+        
+        const handleLoadedMetadata = () => {
+          const duration = audioRef.current?.duration || 30;
+          const timerDuration = Math.min(Math.floor(duration), 30);
+          setMaxTime(timerDuration);
+          setTimeRemaining(timerDuration);
+          audioRef.current?.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        };
+        
+        audioRef.current.addEventListener('loadedmetadata', handleLoadedMetadata);
+        
+        audioRef.current.play().catch(err => {
+          console.error('Failed to play audio:', err);
+        });
+      }
+    } else if (activeLobby?.playbackMode === 'sdk' && spotifyToken && track.uri) {
+      // SDK mode
+      console.log('🎵 SDK Mode - Starting playback for track:', track.name);
+      setMaxTime(30);
+      setTimeRemaining(30);
+      setSdkConnecting(true);
       
-      const handleLoadedMetadata = () => {
-        const duration = audioRef.current?.duration || 30;
-        const timerDuration = Math.min(Math.floor(duration), 30);
-        setMaxTime(timerDuration);
-        setTimeRemaining(timerDuration);
-        audioRef.current?.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      };
-      
-      audioRef.current.addEventListener('loadedmetadata', handleLoadedMetadata);
-      
-      audioRef.current.play().catch(err => {
-        console.error('Failed to play audio:', err);
-      });
+      try {
+        // Wait for player and device to be initialized
+        let currentPlayer = spotifyPlayer || (window as any).__spotifyPlayer;
+        let currentDeviceId = spotifyDeviceId || (window as any).__spotifyDeviceId;
+        
+        console.log('🔍 Initial check - Player:', !!currentPlayer, 'Device:', !!currentDeviceId);
+        
+        // Retry loop for player initialization
+        let retries = 0;
+        const maxRetries = 10; // Increased retries
+        
+        while ((!currentPlayer || !currentDeviceId) && retries < maxRetries) {
+          console.log(`⏳ Waiting for player/device... Retry ${retries + 1}/${maxRetries}`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          currentPlayer = currentPlayer || spotifyPlayer || (window as any).__spotifyPlayer;
+          currentDeviceId = currentDeviceId || spotifyDeviceId || (window as any).__spotifyDeviceId;
+          retries++;
+        }
+        
+        console.log('✅ After waiting - Player:', !!currentPlayer, 'Device:', currentDeviceId);
+        
+        if (!currentPlayer) {
+          console.error('❌ Spotify player not initialized after waiting');
+          throw new Error('Spotify player not initialized after waiting');
+        }
+        
+        if (!currentDeviceId) {
+          console.error('❌ Spotify device not ready after waiting');
+          throw new Error('Spotify device not ready after waiting');
+        }
+        
+        // Update state if we got them from global
+        if (currentPlayer && !spotifyPlayer) {
+          setSpotifyPlayer(currentPlayer);
+        }
+        if (currentDeviceId && !spotifyDeviceId) {
+          setSpotifyDeviceId(currentDeviceId);
+        }
+        
+        // Check if player is connected and connect if needed
+        console.log('🔌 Checking player connection...');
+        let playerState = await currentPlayer.getCurrentState();
+        console.log('🎮 Player state:', playerState ? 'Connected' : 'Disconnected');
+        
+        if (!playerState) {
+          console.log('🔄 Connecting player...');
+          await currentPlayer.connect();
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          console.log('📡 Transferring playback to device...');
+          await transferPlaybackToDevice(spotifyToken, currentDeviceId);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          // Verify connection
+          playerState = await currentPlayer.getCurrentState();
+          console.log('✓ Connection verified:', !!playerState);
+        }
+        
+        // Use Gaussian distribution to pick a timestamp (tends toward middle of track)
+        const trackDurationSeconds = track.duration_ms / 1000;
+        const sampleTimeSeconds = getGaussianSampleTimestamp(trackDurationSeconds, 30);
+        const randomPosition = Math.floor(sampleTimeSeconds * 1000);
+        
+        console.log(`▶️ Playing track at position: ${randomPosition}ms (${Math.floor(randomPosition / 1000)}s)`);
+        
+        // Play directly at the desired position for multiplayer
+        const playResponse = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${currentDeviceId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${spotifyToken}`,
+          },
+          body: JSON.stringify({
+            uris: [track.uri],
+            position_ms: randomPosition,
+          }),
+        });
+
+        if (!playResponse.ok) {
+          const errorText = await playResponse.text();
+          console.error('❌ Play API error:', playResponse.status, errorText);
+          throw new Error(`Failed to play track: ${playResponse.status}`);
+        }
+
+        console.log('✅ Track playing successfully!');
+        setSdkConnecting(false);
+      } catch (error) {
+        console.error('❌ Error in prepareQuestion SDK mode:', error);
+        setSdkConnecting(false);
+        setError('Failed to play track. Please check your Spotify connection.');
+      }
+    } else if (activeLobby?.playbackMode === 'sdk') {
+      console.log('⚠️ SDK mode but missing requirements - Token:', !!spotifyToken, 'URI:', !!track.uri);
+      setError('Spotify Premium connection required. Please connect your account.');
     }
   };
 
@@ -500,8 +724,11 @@ function MultiplayerContent() {
       players: updatedPlayers
     });
 
-    if (audioRef.current) {
+    // Pause audio
+    if (lobby.playbackMode === 'preview' && audioRef.current) {
       audioRef.current.pause();
+    } else if (lobby.playbackMode === 'sdk' && spotifyPlayer) {
+      spotifyPlayer.pause();
     }
   };
 
@@ -538,8 +765,11 @@ function MultiplayerContent() {
       players: updatedPlayers
     });
 
-    if (audioRef.current) {
+    // Pause audio
+    if (lobby?.playbackMode === 'preview' && audioRef.current) {
       audioRef.current.pause();
+    } else if (lobby?.playbackMode === 'sdk' && spotifyPlayer) {
+      spotifyPlayer.pause();
     }
   };
 
@@ -736,6 +966,48 @@ function MultiplayerContent() {
                 </div>
               </div>
 
+              {/* Spotify Auth for SDK mode */}
+              {playbackMode === 'sdk' && !spotifyToken && (
+                <div className="bg-[#181818] border-2 border-[#535353] rounded-lg p-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex-shrink-0 mt-0.5">
+                      <svg className="w-6 h-6 text-[#1db954]" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-white mb-1">
+                        Spotify Premium Required
+                      </p>
+                      <p className="text-sm text-[#b3b3b3] mb-3">
+                        Premium Mode requires an active Spotify Premium subscription. Please connect your account to continue.
+                      </p>
+                      <button
+                        onClick={handleSpotifyAuth}
+                        className="w-full bg-[#1db954] text-white py-2.5 px-4 rounded-lg font-semibold hover:bg-[#1ed760] transition flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+                        </svg>
+                        Connect Spotify Premium
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Connected status for SDK mode */}
+              {playbackMode === 'sdk' && spotifyToken && (
+                <div className="bg-[#181818] border border-[#1db954] rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-[#1db954]">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="text-sm font-semibold">Spotify Premium Connected</span>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-[#b3b3b3] mb-2">
                   Spotify Playlist URL
@@ -768,7 +1040,7 @@ function MultiplayerContent() {
               <div className="flex gap-3">
                 <button
                   onClick={createLobby}
-                  disabled={!isValidPlaylistUrl(playlistUrl) || loading}
+                  disabled={!isValidPlaylistUrl(playlistUrl) || loading || (playbackMode === 'sdk' && !spotifyToken)}
                   className="flex-1 bg-[#1db954] text-white py-3 rounded-lg font-semibold hover:bg-[#1ed760] transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loading ? 'Creating...' : 'Create Lobby'}
@@ -872,9 +1144,39 @@ function MultiplayerContent() {
               
               <div className="bg-[#181818] rounded-lg p-4 mb-4">
                 <p className="text-white font-semibold">{lobby.playlistInfo?.name}</p>
-                <p className="text-sm text-[#b3b3b3]">{lobby.totalQuestions} questions</p>
+                <p className="text-sm text-[#b3b3b3]">{lobby.totalQuestions} questions • {lobby.playbackMode === 'sdk' ? 'Premium Mode' : 'Preview Mode'}</p>
               </div>
             </div>
+
+            {/* Spotify Auth for SDK mode in lobby */}
+            {lobby.playbackMode === 'sdk' && !spotifyToken && !isHost && (
+              <div className="mb-6 bg-[#181818] border-2 border-[#535353] rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex-shrink-0 mt-0.5">
+                    <svg className="w-6 h-6 text-[#1db954]" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-white mb-1">
+                      Spotify Premium Required
+                    </p>
+                    <p className="text-sm text-[#b3b3b3] mb-3">
+                      This lobby uses Premium Mode. Connect your Spotify Premium account to play.
+                    </p>
+                    <button
+                      onClick={handleSpotifyAuth}
+                      className="w-full bg-[#1db954] text-white py-2.5 px-4 rounded-lg font-semibold hover:bg-[#1ed760] transition flex items-center justify-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+                      </svg>
+                      Connect Spotify Premium
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="mb-6">
               <h3 className="text-lg font-semibold text-white mb-3">
@@ -927,13 +1229,16 @@ function MultiplayerContent() {
               ) : (
                 <button
                   onClick={toggleReady}
+                  disabled={lobby.playbackMode === 'sdk' && !spotifyToken}
                   className={`flex-1 py-3 rounded-lg font-semibold transition ${
                     currentPlayer?.isReady
                       ? 'bg-[#535353] hover:bg-[#636363] text-white'
                       : 'bg-[#1db954] hover:bg-[#1ed760] text-white'
-                  }`}
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
-                  {currentPlayer?.isReady ? 'Not Ready' : 'Ready'}
+                  {lobby.playbackMode === 'sdk' && !spotifyToken
+                    ? 'Connect Spotify First'
+                    : currentPlayer?.isReady ? 'Not Ready' : 'Ready'}
                 </button>
               )}
               
@@ -949,7 +1254,18 @@ function MultiplayerContent() {
 
         {/* Playing View */}
         {view === 'playing' && lobby && currentTrack && (
-          <div className="bg-[#212121] rounded-2xl border border-[#535353] shadow-xl p-8">
+          <div className="bg-[#212121] rounded-2xl border border-[#535353] shadow-xl p-8 relative">
+            {/* SDK Connecting Overlay */}
+            {sdkConnecting && (
+              <div className="absolute inset-0 bg-[#212121] bg-opacity-95 rounded-2xl flex items-center justify-center z-50">
+                <div className="text-center">
+                  <div className="inline-block animate-spin rounded-full h-16 w-16 border-b-4 border-[#1db954] mb-4"></div>
+                  <p className="text-white text-xl font-semibold">Connecting to Spotify...</p>
+                  <p className="text-[#b3b3b3] mt-2">Please wait while we prepare playback</p>
+                </div>
+              </div>
+            )}
+
             <div className="mb-6">
               <div className="flex justify-between items-center mb-4">
                 <span className="text-[#b3b3b3] font-medium">

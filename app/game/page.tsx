@@ -20,7 +20,7 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 import Link from 'next/link';
 import { getSpotifyAuthUrl, initializeSpotifyPlayer, playTrackAtPosition, transferPlaybackToDevice, SpotifyPlayer } from '@/lib/spotify';
 import { Music2, Play, Volume2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { getGaussianSampleTimestamp } from '@/lib/gameLogic';
 
 export default function GamePage() {
   return (
@@ -64,7 +64,7 @@ function GameContent() {
   const [spotifyToken, setSpotifyToken] = useState<string | null>(null);
   const [sdkReady, setSdkReady] = useState(false);
   const [sdkConnecting, setSdkConnecting] = useState(false);
-  const [volume, setVolume] = useState(0.5); // 0.0 to 1.0
+  const [volume, setVolume] = useState(0.2); // 0.0 to 1.0
   const [usedIncorrectOptions, setUsedIncorrectOptions] = useState<Set<string>>(new Set());
   const [playbackRetries, setPlaybackRetries] = useState(0);
   const maxPlaybackRetries = 2;
@@ -378,8 +378,10 @@ function GameContent() {
           }
         }
         
-        // Random position between 30 seconds and 60 seconds before the end
-        const randomPosition = Math.floor(Math.random() * (track.duration_ms - 60000)) + 30000;
+        // Use Gaussian distribution to pick a timestamp (tends toward middle of track)
+        const trackDurationSeconds = track.duration_ms / 1000;
+        const sampleTimeSeconds = getGaussianSampleTimestamp(trackDurationSeconds, 30);
+        const randomPosition = Math.floor(sampleTimeSeconds * 1000);
         
         await playTrackAtPosition(spotifyToken, currentDeviceId, track.uri, randomPosition);
         setPlaybackRetries(0); // Reset retry count on success

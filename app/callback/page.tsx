@@ -17,7 +17,9 @@ export default function CallbackPage() {
       if (errorParam) {
         setError(`Authentication error: ${errorParam}`);
         setDebugInfo(`Error: ${errorParam}`);
-        setTimeout(() => router.push('/game'), 3000);
+        const returnPath = localStorage.getItem('spotify_auth_return_path') || '/game';
+        localStorage.removeItem('spotify_auth_return_path');
+        setTimeout(() => router.push(returnPath), 3000);
         return;
       }
       
@@ -38,24 +40,36 @@ export default function CallbackPage() {
             setDebugInfo(`Account type: ${profile.product}\nPremium Mode requires Spotify Premium subscription.`);
             // Still store token and redirect after delay
             localStorage.setItem('spotify_access_token', token);
-            setTimeout(() => router.push('/game'), 4000);
+            localStorage.removeItem('spotify_code_verifier');
+            const returnPath = localStorage.getItem('spotify_auth_return_path') || '/game';
+            localStorage.removeItem('spotify_auth_return_path');
+            setTimeout(() => router.push(returnPath), 4000);
             return;
           }
           
           // Store token in localStorage
           localStorage.setItem('spotify_access_token', token);
           
-          // Redirect back to game page
-          router.push('/game');
+          // Now safe to remove code verifier after successful token storage
+          localStorage.removeItem('spotify_code_verifier');
+          
+          // Redirect back to the page that initiated auth, or default to game page
+          const returnPath = localStorage.getItem('spotify_auth_return_path') || '/game';
+          localStorage.removeItem('spotify_auth_return_path');
+          router.push(returnPath);
         } catch (err) {
           console.error('Token exchange failed:', err);
           setError(err instanceof Error ? err.message : 'Failed to get access token');
           setDebugInfo(`Token exchange error: ${err}`);
-          setTimeout(() => router.push('/game'), 3000);
+          const returnPath = localStorage.getItem('spotify_auth_return_path') || '/game';
+          localStorage.removeItem('spotify_auth_return_path');
+          setTimeout(() => router.push(returnPath), 3000);
         }
       } else {
         setDebugInfo(`Search: ${window.location.search}`);
-        setTimeout(() => router.push('/game'), 3000);
+        const returnPath = localStorage.getItem('spotify_auth_return_path') || '/game';
+        localStorage.removeItem('spotify_auth_return_path');
+        setTimeout(() => router.push(returnPath), 3000);
       }
     };
     

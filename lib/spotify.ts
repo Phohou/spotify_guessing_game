@@ -138,7 +138,8 @@ export const exchangeCodeForToken = async (code: string): Promise<string> => {
     throw new Error('Invalid response format from Spotify');
   }
   
-  localStorage.removeItem('spotify_code_verifier');
+  // Don't remove code verifier yet - callback page will handle it after storing token
+  // This prevents race conditions where verifier is cleared before token exchange completes
   
   return data.access_token;
 };
@@ -249,20 +250,47 @@ export const playTrackAtPosition = async (
   trackUri: string,
   positionMs: number = 0
 ): Promise<void> => {
-  const response = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      uris: [trackUri],
-      position_ms: positionMs,
-    }),
-  });
+  try {
+    // First, start playing the track from the beginning
+    const playResponse = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        uris: [trackUri],
+        position_ms: 0, // Start from beginning first
+      }),
+    });
 
-  if (!response.ok) {
-    throw new Error('Failed to play track');
+    if (!playResponse.ok) {
+      const errorText = await playResponse.text();
+      console.error('Play error:', errorText);
+      throw new Error(`Failed to play track: ${playResponse.status}`);
+    }
+
+    // Wait for the track to start loading (increased from 500ms for better reliability)
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Then seek to the desired position if not at the beginning
+    if (positionMs > 0) {
+      const seekResponse = await fetch(`https://api.spotify.com/v1/me/player/seek?position_ms=${positionMs}&device_id=${deviceId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!seekResponse.ok) {
+        const errorText = await seekResponse.text();
+        console.error('Seek error:', errorText);
+        // Don't throw here, the track is still playing from the beginning
+      }
+    }
+  } catch (error) {
+    console.error('Error in playTrackAtPosition:', error);
+    throw error;
   }
 };
 

@@ -13,6 +13,36 @@ export function shuffleArray<T>(array: T[]): T[] {
 }
 
 /**
+ * Generates a random number from a Gaussian (normal) distribution
+ * Uses Box-Muller transform
+ */
+function gaussianRandom(mean: number, stdev: number): number {
+  const u1 = Math.random();
+  const u2 = Math.random();
+  const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+  return z0 * stdev + mean;
+}
+
+/**
+ * Gets a sample timestamp using a Gaussian distribution
+ * This tends to pick times near the middle of the preview, with decreasing probability toward the edges
+ */
+export function getGaussianSampleTimestamp(previewDuration: number = 30, clipLength: number = 3): number {
+  const mean = previewDuration / 2;       // middle of the preview
+  const stdev = previewDuration / 6;      // tweak this for "tightness" (6σ ≈ full range)
+
+  let t;
+  let maxStart = previewDuration - clipLength;
+
+  // Keep drawing until we get a timestamp inside valid bounds
+  do {
+    t = gaussianRandom(mean, stdev);
+  } while (t < 0 || t > maxStart);
+
+  return t;
+}
+
+/**
  * Selects a random start time for audio preview
  * Ensures we don't start too close to the end
  */
