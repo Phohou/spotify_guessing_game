@@ -29,7 +29,7 @@ import {
   generateSmartMultipleChoiceOptions,
   calculateScore,
   filterTracksWithPreviews,
-  getGaussianSampleTimestamp,
+  getGaussianStartTime,
 } from '@/lib/gameLogic';
 import { SpotifyTrack, GameAnswer } from '@/lib/types';
 import ProtectedRoute from '@/components/ProtectedRoute';
@@ -60,6 +60,7 @@ interface Lobby {
   createdAt: any;
   startedAt?: any;
   playbackMode: 'preview' | 'sdk';
+  startPositions?: number[]; // Pre-calculated start positions (in ms) for each track
 }
 
 export default function MultiplayerPage() {
@@ -534,9 +535,17 @@ function MultiplayerContent() {
     }
 
     try {
+      // Pre-calculate start positions for all tracks
+      const startPositions = lobby.tracks.map(track => {
+        const trackDurationSeconds = track.duration_ms / 1000;
+        const startTimeSeconds = getGaussianStartTime(trackDurationSeconds, 30);
+        return Math.floor(startTimeSeconds * 1000);
+      });
+
       await updateDoc(doc(db, 'lobbies', lobby.id), {
         status: 'playing',
-        startedAt: serverTimestamp()
+        startedAt: serverTimestamp(),
+        startPositions // Store calculated positions for all players to use
       });
     } catch (err) {
       console.error('Error starting game:', err);
@@ -547,7 +556,7 @@ function MultiplayerContent() {
     const track = tracks[index];
     const activeLobby = currentLobby || lobby;
     
-    console.log('🎯 prepareQuestion called - Track:', track.name, 'Mode:', activeLobby?.playbackMode);
+    console.log('PrepareQuestion called - Track:', track.name, 'Mode:', activeLobby?.playbackMode);
     
     setCurrentTrack(track);
     
@@ -586,7 +595,7 @@ function MultiplayerContent() {
       }
     } else if (activeLobby?.playbackMode === 'sdk' && spotifyToken && track.uri) {
       // SDK mode
-      console.log('🎵 SDK Mode - Starting playback for track:', track.name);
+      console.log('SDK Mode - Starting playback for track:', track.name);
       setMaxTime(30);
       setTimeRemaining(30);
       setSdkConnecting(true);
@@ -596,29 +605,29 @@ function MultiplayerContent() {
         let currentPlayer = spotifyPlayer || (window as any).__spotifyPlayer;
         let currentDeviceId = spotifyDeviceId || (window as any).__spotifyDeviceId;
         
-        console.log('🔍 Initial check - Player:', !!currentPlayer, 'Device:', !!currentDeviceId);
+        console.log('Initial check - Player:', !!currentPlayer, 'Device:', !!currentDeviceId);
         
         // Retry loop for player initialization
         let retries = 0;
         const maxRetries = 10; // Increased retries
         
         while ((!currentPlayer || !currentDeviceId) && retries < maxRetries) {
-          console.log(`⏳ Waiting for player/device... Retry ${retries + 1}/${maxRetries}`);
+          console.log(`Waiting for player/device... Retry ${retries + 1}/${maxRetries}`);
           await new Promise(resolve => setTimeout(resolve, 500));
           currentPlayer = currentPlayer || spotifyPlayer || (window as any).__spotifyPlayer;
           currentDeviceId = currentDeviceId || spotifyDeviceId || (window as any).__spotifyDeviceId;
           retries++;
         }
         
-        console.log('✅ After waiting - Player:', !!currentPlayer, 'Device:', currentDeviceId);
+        console.log('After waiting - Player:', !!currentPlayer, 'Device:', currentDeviceId);
         
         if (!currentPlayer) {
-          console.error('❌ Spotify player not initialized after waiting');
+          console.error('Spotify player not initialized after waiting');
           throw new Error('Spotify player not initialized after waiting');
         }
         
         if (!currentDeviceId) {
-          console.error('❌ Spotify device not ready after waiting');
+          console.error('Spotify device not ready after waiting');
           throw new Error('Spotify device not ready after waiting');
         }
         
@@ -631,28 +640,26 @@ function MultiplayerContent() {
         }
         
         // Check if player is connected and connect if needed
-        console.log('🔌 Checking player connection...');
+        console.log('Checking player connection...');
         let playerState = await currentPlayer.getCurrentState();
-        console.log('🎮 Player state:', playerState ? 'Connected' : 'Disconnected');
+        console.log('Player state:', playerState ? 'Connected' : 'Disconnected');
         
         if (!playerState) {
-          console.log('🔄 Connecting player...');
+          console.log('Connecting player...');
           await currentPlayer.connect();
           await new Promise(resolve => setTimeout(resolve, 2000));
-          console.log('📡 Transferring playback to device...');
+          console.log('Transferring playback to device...');
           await transferPlaybackToDevice(spotifyToken, currentDeviceId);
           await new Promise(resolve => setTimeout(resolve, 1000));
           // Verify connection
           playerState = await currentPlayer.getCurrentState();
-          console.log('✓ Connection verified:', !!playerState);
+          console.log('Connection verified:', !!playerState);
         }
         
-        // Use Gaussian distribution to pick a timestamp (tends toward middle of track)
-        const trackDurationSeconds = track.duration_ms / 1000;
-        const sampleTimeSeconds = getGaussianSampleTimestamp(trackDurationSeconds, 30);
-        const randomPosition = Math.floor(sampleTimeSeconds * 1000);
+        // Use pre-calculated start position from lobby (calculated by host)
+        const randomPosition = activeLobby?.startPositions?.[index] ?? 0;
         
-        console.log(`▶️ Playing track at position: ${randomPosition}ms (${Math.floor(randomPosition / 1000)}s)`);
+        console.log(`Playing track at position: ${randomPosition}ms (${Math.floor(randomPosition / 1000)}s)`);
         
         // Play directly at the desired position for multiplayer
         const playResponse = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${currentDeviceId}`, {
@@ -669,19 +676,19 @@ function MultiplayerContent() {
 
         if (!playResponse.ok) {
           const errorText = await playResponse.text();
-          console.error('❌ Play API error:', playResponse.status, errorText);
+          console.error('Play API error:', playResponse.status, errorText);
           throw new Error(`Failed to play track: ${playResponse.status}`);
         }
 
-        console.log('✅ Track playing successfully!');
+        console.log('Track playing successfully!');
         setSdkConnecting(false);
       } catch (error) {
-        console.error('❌ Error in prepareQuestion SDK mode:', error);
+        console.error('Error in prepareQuestion SDK mode:', error);
         setSdkConnecting(false);
         setError('Failed to play track. Please check your Spotify connection.');
       }
     } else if (activeLobby?.playbackMode === 'sdk') {
-      console.log('⚠️ SDK mode but missing requirements - Token:', !!spotifyToken, 'URI:', !!track.uri);
+      console.log('SDK mode but missing requirements - Token:', !!spotifyToken, 'URI:', !!track.uri);
       setError('Spotify Premium connection required. Please connect your account.');
     }
   };
@@ -918,9 +925,9 @@ function MultiplayerContent() {
                 Join Lobby
               </button>
 
-              <Link href="/game">
+              <Link href="/">
                 <button className="w-full bg-[#282828] text-white py-4 rounded-lg font-semibold hover:bg-[#383838] transition">
-                  Back to Solo Mode
+                  Back
                 </button>
               </Link>
             </div>

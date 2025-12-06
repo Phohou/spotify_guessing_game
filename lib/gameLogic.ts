@@ -16,39 +16,31 @@ export function shuffleArray<T>(array: T[]): T[] {
  * Generates a random number from a Gaussian (normal) distribution
  * Uses Box-Muller transform
  */
-function gaussianRandom(mean: number, stdev: number): number {
-  const u1 = Math.random();
-  const u2 = Math.random();
-  const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-  return z0 * stdev + mean;
+function gaussianRandom(mean: number = 0, stdev: number = 1): number {
+  // Box–Muller transform
+  const u = 1 - Math.random();
+  const v = Math.random();
+  const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  return z * stdev + mean;
 }
 
 /**
- * Gets a sample timestamp using a Gaussian distribution
- * This tends to pick times near the middle of the preview, with decreasing probability toward the edges
+ * Gets a Gaussian-distributed start time for track sampling
+ * Picks a timestamp with 30 second sample length, favoring the middle of the track
  */
-export function getGaussianSampleTimestamp(previewDuration: number = 30, clipLength: number = 3): number {
-  const mean = previewDuration / 2;       // middle of the preview
-  const stdev = previewDuration / 6;      // tweak this for "tightness" (6σ ≈ full range)
+export function getGaussianStartTime(trackDuration: number, sampleLength: number = 30): number {
+  const maxStart = trackDuration - sampleLength; // must fit
+  const mean = trackDuration / 2;
+  const stdev = trackDuration / 6;
 
   let t;
-  let maxStart = previewDuration - clipLength;
 
-  // Keep drawing until we get a timestamp inside valid bounds
+  // Retry until we land within bounds
   do {
     t = gaussianRandom(mean, stdev);
   } while (t < 0 || t > maxStart);
 
   return t;
-}
-
-/**
- * Selects a random start time for audio preview
- * Ensures we don't start too close to the end
- */
-export function getRandomStartTime(durationMs: number, previewLength: number = 30000): number {
-  const maxStartTime = Math.max(0, durationMs - previewLength);
-  return Math.floor(Math.random() * maxStartTime);
 }
 
 /**

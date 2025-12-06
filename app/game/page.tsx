@@ -20,7 +20,7 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 import Link from 'next/link';
 import { getSpotifyAuthUrl, initializeSpotifyPlayer, playTrackAtPosition, transferPlaybackToDevice, SpotifyPlayer } from '@/lib/spotify';
 import { Music2, Play, Volume2 } from 'lucide-react';
-import { getGaussianSampleTimestamp } from '@/lib/gameLogic';
+import { getGaussianStartTime } from '@/lib/gameLogic';
 
 export default function GamePage() {
   return (
@@ -380,10 +380,27 @@ function GameContent() {
         
         // Use Gaussian distribution to pick a timestamp (tends toward middle of track)
         const trackDurationSeconds = track.duration_ms / 1000;
-        const sampleTimeSeconds = getGaussianSampleTimestamp(trackDurationSeconds, 30);
-        const randomPosition = Math.floor(sampleTimeSeconds * 1000);
+        const startTimeSeconds = getGaussianStartTime(trackDurationSeconds, 30);
+        const randomPosition = Math.floor(startTimeSeconds * 1000);
         
-        await playTrackAtPosition(spotifyToken, currentDeviceId, track.uri, randomPosition);
+        // Play directly at the desired position (avoids playing from start then seeking)
+        const playResponse = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${currentDeviceId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${spotifyToken}`,
+          },
+          body: JSON.stringify({
+            uris: [track.uri],
+            position_ms: randomPosition,
+          }),
+        });
+
+        if (!playResponse.ok) {
+          const errorText = await playResponse.text();
+          throw new Error(`Failed to play track: ${playResponse.status}`);
+        }
+        
         setPlaybackRetries(0); // Reset retry count on success
         
         // Only start the timer after playback has successfully started
