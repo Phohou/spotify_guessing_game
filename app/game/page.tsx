@@ -10,7 +10,6 @@ import {
   extractPlaylistId,
   isValidPlaylistUrl,
   shuffleArray,
-  generateMultipleChoiceOptions,
   generateSmartMultipleChoiceOptions,
   calculateScore,
   filterTracksWithPreviews,

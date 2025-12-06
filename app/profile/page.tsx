@@ -160,23 +160,23 @@ function ProfileContent() {
               {recentGames.map((game) => (
                 <div
                   key={game.id}
-                  className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition"
+                  className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition group"
                 >
                   <div className="flex justify-between items-start">
                     <div>
-                      <h3 className="font-semibold text-white mb-1">
+                      <h3 className="font-semibold text-white group-hover:text-black mb-1">
                         {game.playlistName || 'Unknown Playlist'}
                       </h3>
-                      <p className="text-sm text-[#b3b3b3]">
+                      <p className="text-sm text-[#b3b3b3] group-hover:text-gray-600">
                         {game.correctAnswers}/{game.totalQuestions} correct •{' '}
                         {Math.round((game.correctAnswers / game.totalQuestions) * 100)}% accuracy
                       </p>
                     </div>
                     <div className="text-right">
-                      <div className="text-2xl font-bold text-[#1db954]">
+                      <div className="text-2xl font-bold text-[#1db954] group-hover:text-green-600">
                         {game.score}
                       </div>
-                      <p className="text-xs text-[#b3b3b3]">points</p>
+                      <p className="text-xs text-[#b3b3b3] group-hover:text-gray-600">points</p>
                     </div>
                   </div>
                 </div>

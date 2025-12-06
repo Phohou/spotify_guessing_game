@@ -88,6 +88,7 @@ function MultiplayerContent() {
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [totalQuestions, setTotalQuestions] = useState(10);
   const [playbackMode, setPlaybackMode] = useState<'preview' | 'sdk'>('preview');
+  const [fullPlaylist, setFullPlaylist] = useState<SpotifyTrack[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -258,7 +259,7 @@ function MultiplayerContent() {
       // Update view based on lobby status
       if (lobbyData.status === 'playing' && view !== 'playing') {
         setView('playing');
-        prepareQuestion(lobbyData.currentTrackIndex, lobbyData.tracks, lobbyData);
+        prepareQuestion(lobbyData.currentTrackIndex, lobbyData.tracks, fullPlaylist, lobbyData);
         previousTrackIndex = lobbyData.currentTrackIndex;
       } else if (lobbyData.status === 'playing' && view === 'playing') {
         // Initialize previousTrackIndex if not set
@@ -267,7 +268,7 @@ function MultiplayerContent() {
         }
         // Check if track index changed (host moved to next question)
         else if (lobbyData.currentTrackIndex !== previousTrackIndex) {
-          prepareQuestion(lobbyData.currentTrackIndex, lobbyData.tracks, lobbyData);
+          prepareQuestion(lobbyData.currentTrackIndex, lobbyData.tracks, fullPlaylist, lobbyData);
           previousTrackIndex = lobbyData.currentTrackIndex;
         }
       } else if (lobbyData.status === 'finished' && view !== 'results') {
@@ -393,6 +394,7 @@ function MultiplayerContent() {
 
       const shuffled = shuffleArray(playableTracks);
       const gameTracks = shuffled.slice(0, Math.min(totalQuestions, shuffled.length));
+      setFullPlaylist(playableTracks); // Store full playlist for generating options
 
       // Create lobby in Firestore
       const lobbyRef = await addDoc(collection(db, 'lobbies'), {
@@ -552,8 +554,9 @@ function MultiplayerContent() {
     }
   };
 
-  const prepareQuestion = async (index: number, tracks: SpotifyTrack[], currentLobby?: Lobby) => {
+  const prepareQuestion = async (index: number, tracks: SpotifyTrack[], allTracks: SpotifyTrack[], currentLobby?: Lobby) => {
     const track = tracks[index];
+    const tracksForOptions = allTracks || fullPlaylist;
     const activeLobby = currentLobby || lobby;
     
     console.log('PrepareQuestion called - Track:', track.name, 'Mode:', activeLobby?.playbackMode);
@@ -563,7 +566,7 @@ function MultiplayerContent() {
     // Generate options
     const allOptions = generateSmartMultipleChoiceOptions(
       track,
-      tracks,
+      tracksForOptions,
       new Set(),
       4
     );
@@ -900,7 +903,7 @@ function MultiplayerContent() {
         </div>
 
         {error && (
-          <div className="mb-6 p-4 bg-red-500 bg-opacity-10 border border-red-500 rounded-lg text-red-500">
+          <div className="mb-6 p-4 bg-red-500 bg-opacity-10 border border-red-500 rounded-lg text-white font-semibold">
             {error}
           </div>
         )}
@@ -1251,7 +1254,7 @@ function MultiplayerContent() {
               
               <button
                 onClick={leaveLobby}
-                className="px-6 bg-red-500 bg-opacity-20 border border-red-500 text-red-500 py-3 rounded-lg font-semibold hover:bg-opacity-30 transition"
+                className="px-6 bg-red-500 bg-opacity-20 border border-red-500 text-white py-3 rounded-lg font-semibold hover:bg-opacity-30 transition"
               >
                 Leave
               </button>
@@ -1451,7 +1454,7 @@ function MultiplayerContent() {
                           </p>
                         </div>
                       </div>
-                      <span className="text-2xl font-bold text-[#1db954]">{player.score}</span>
+                      <span className="text-2xl font-bold text-white">{player.score}</span>
                     </div>
                   ))}
               </div>

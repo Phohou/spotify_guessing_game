@@ -69,62 +69,6 @@ export function calculateScore(
 }
 
 /**
- * Generates multiple choice options for a track
- * Uses enhanced randomization to ensure different options each time
- */
-export function generateMultipleChoiceOptions(
-  correctTrack: SpotifyTrack,
-  allTracks: SpotifyTrack[],
-  count: number = 4
-): string[] {
-  const options = new Set<string>();
-  options.add(correctTrack.name);
-  
-  // Get tracks that are NOT the correct track
-  const otherTracks = allTracks.filter(t => t.id !== correctTrack.id);
-  
-  // Add extra randomization by shuffling multiple times
-  let shuffled = shuffleArray(otherTracks);
-  
-  // Randomly select starting position to increase variety
-  const startIndex = Math.floor(Math.random() * Math.max(1, shuffled.length - count));
-  
-  // Pick random tracks starting from random position
-  for (let i = startIndex; i < shuffled.length && options.size < count; i++) {
-    // Only add if the name is unique and different from correct answer
-    if (shuffled[i].name !== correctTrack.name) {
-      options.add(shuffled[i].name);
-    }
-  }
-  
-  // If still not enough, wrap around from beginning
-  if (options.size < count) {
-    for (let i = 0; i < startIndex && options.size < count; i++) {
-      if (shuffled[i].name !== correctTrack.name) {
-        options.add(shuffled[i].name);
-      }
-    }
-  }
-  
-  // If we STILL don't have enough (small playlist), add artist-based decoys
-  if (options.size < count) {
-    const artists = allTracks.map(t => t.artists[0]?.name).filter(Boolean);
-    const uniqueArtists = Array.from(new Set(artists));
-    const shuffledArtists = shuffleArray(uniqueArtists);
-    
-    for (let i = 0; i < shuffledArtists.length && options.size < count; i++) {
-      const decoy = `${shuffledArtists[i]} - Unknown Track`;
-      if (decoy !== correctTrack.name) {
-        options.add(decoy);
-      }
-    }
-  }
-  
-  // Final shuffle to randomize the order of all options
-  return shuffleArray(Array.from(options));
-}
-
-/**
  * Generates multiple choice options while completely avoiding previously used incorrect answers
  * Once a track is used as an incorrect option, it's removed from the pool
  */
