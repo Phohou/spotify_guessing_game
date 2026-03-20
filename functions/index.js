@@ -68,7 +68,16 @@ async function batchFetchPreviews(tracksToFetch, concurrencyLimit = 5) {
   return results;
 }
 
-setGlobalOptions({ maxInstances: 10 });
+setGlobalOptions({
+  maxInstances: 10,
+  minInstances: 1,
+});
+
+const callableCorsOrigins = [
+  /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/,
+  /^https:\/\/.+\.web\.app$/,
+  /^https:\/\/.+\.firebaseapp\.com$/,
+];
 
 /**
  * Gets Spotify access token using Client Credentials flow
@@ -103,7 +112,10 @@ async function getSpotifyAccessToken() {
  * Fetches a Spotify playlist by ID
  * Requires SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET secrets
  */
-exports.getPlaylist = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"]}, async (request) => {
+exports.getPlaylist = onCall({
+  secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"],
+  cors: callableCorsOrigins,
+}, async (request) => {
   try {
     const {playlistId} = request.data;
 
@@ -175,7 +187,10 @@ exports.getPlaylist = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SEC
  * Fetches all tracks from a Spotify playlist
  * Requires SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET secrets
  */
-exports.getPlaylistTracks = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"]}, async (request) => {
+exports.getPlaylistTracks = onCall({
+  secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"],
+  cors: callableCorsOrigins,
+}, async (request) => {
   try {
     const {playlistId, includeAll} = request.data;
 
@@ -311,7 +326,9 @@ exports.getPlaylistTracks = onCall({secrets: ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIE
 /**
  * Saves a game session to Firestore
  */
-exports.saveGameSession = onCall(async (request) => {
+exports.saveGameSession = onCall({
+  cors: callableCorsOrigins,
+}, async (request) => {
   try {
     // Verify user is authenticated
     if (!request.auth) {

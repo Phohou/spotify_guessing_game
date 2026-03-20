@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/hooks';
-import { functions, db } from '@/lib/firebase';
-import { httpsCallable } from 'firebase/functions';
+import { db } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp, doc, getDoc, setDoc, updateDoc, increment, query, where, getDocs } from 'firebase/firestore';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -20,6 +19,7 @@ import Link from 'next/link';
 import { getSpotifyAuthUrl, initializeSpotifyPlayer, playTrackAtPosition, transferPlaybackToDevice, SpotifyPlayer } from '@/lib/spotify';
 import { Music2, Play, Volume2 } from 'lucide-react';
 import { getGaussianStartTime } from '@/lib/gameLogic';
+import { fetchPlaylist, fetchPlaylistTracks } from '@/lib/playlistApi';
 
 export default function GamePage() {
   return (
@@ -235,10 +235,7 @@ function GameContent() {
         return;
       }
 
-      // Call Firebase Function to get playlist
-      const getPlaylist = httpsCallable(functions, 'getPlaylist');
-      const playlistResult = await getPlaylist({ playlistId });
-      const playlistData: any = playlistResult.data;
+      const playlistData = await fetchPlaylist({ playlistId });
 
       if (!playlistData.success) {
         setError('Failed to load playlist');
@@ -248,10 +245,10 @@ function GameContent() {
 
       setPlaylistInfo(playlistData.playlist);
 
-      // Get playlist tracks
-      const getTracks = httpsCallable(functions, 'getPlaylistTracks');
-      const tracksResult = await getTracks({ playlistId, includeAll: playbackMode === 'sdk' });
-      const tracksData: any = tracksResult.data;
+      const tracksData = await fetchPlaylistTracks({
+        playlistId,
+        includeAll: playbackMode === 'sdk',
+      });
 
       if (!tracksData.success || tracksData.tracks.length === 0) {
         setError('No tracks found in playlist');

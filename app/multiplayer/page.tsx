@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/hooks';
-import { functions, db } from '@/lib/firebase';
-import { httpsCallable } from 'firebase/functions';
+import { db } from '@/lib/firebase';
 import { 
   collection, 
   addDoc, 
@@ -37,6 +36,7 @@ import Link from 'next/link';
 import { Users, Copy, Check, Crown, Trophy, Music2, Volume2, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getSpotifyAuthUrl, initializeSpotifyPlayer, playTrackAtPosition, transferPlaybackToDevice, SpotifyPlayer } from '@/lib/spotify';
+import { fetchPlaylist, fetchPlaylistTracks } from '@/lib/playlistApi';
 
 interface Player {
   uid: string;
@@ -354,20 +354,17 @@ function MultiplayerContent() {
         return;
       }
 
-      // Load playlist data
-      const getPlaylist = httpsCallable(functions, 'getPlaylist');
-      const playlistResult = await getPlaylist({ playlistId });
-      const playlistData: any = playlistResult.data;
+      const playlistData = await fetchPlaylist({ playlistId });
 
       if (!playlistData.success) {
         setError('Failed to load playlist');
         return;
       }
 
-      // Get tracks
-      const getTracks = httpsCallable(functions, 'getPlaylistTracks');
-      const tracksResult = await getTracks({ playlistId, includeAll: playbackMode === 'sdk' });
-      const tracksData: any = tracksResult.data;
+      const tracksData = await fetchPlaylistTracks({
+        playlistId,
+        includeAll: playbackMode === 'sdk',
+      });
 
       if (!tracksData.success || tracksData.tracks.length === 0) {
         setError('No tracks found in playlist');

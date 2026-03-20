@@ -12,7 +12,10 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "GuessTify - Spotify Music Guessing Game",
   description: "Test your music knowledge! Guess songs from Spotify playlists in Preview Mode or Premium Mode with full playback controls.",
   openGraph: {
